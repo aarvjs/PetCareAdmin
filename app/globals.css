@@ -1,26 +1,46 @@
 @import "tailwindcss";
+@config "../tailwind.config.mjs";
+@source "../app";
+@source "../components";
+@source "../lib";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #F8FAFC;
+  --foreground: #25242A;
+  --card-bg: #FFFFFF;
+  --primary-purple: #7567E8;
+  --primary-sky: #72CFF2;
+  --light-sky: #EAF8FE;
+  --soft-lavender: #F1EEFF;
+  --mint: #DFF7EE;
+  --secondary-text: #737780;
+  --border-color: #E8ECF0;
+  --success: #35B779;
+  --warning: #F2B84B;
+  --error: #E46A6A;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Force light theme always for Admin Panel */
+html, body {
+  background-color: #F8FAFC !important;
+  color: #25242A !important;
+  font-family: var(--font-plus-jakarta), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Custom scrollbar for admin dashboard */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
 }

@@ -1,0 +1,115 @@
+'use client';
+
+import React from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import {
+  LayoutDashboard,
+  Calendar,
+  Dog,
+  Sparkles,
+  Syringe,
+  FileText,
+  User,
+  Settings,
+  LogOut,
+  X,
+  Stethoscope,
+} from 'lucide-react';
+
+interface DoctorSidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export const DoctorSidebar: React.FC<DoctorSidebarProps> = ({ isOpen = false, onClose }) => {
+  const pathname = usePathname();
+
+  const navItems = [
+    { name: 'Dashboard', href: '/doctor/dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
+    { name: 'Appointments', href: '/doctor/appointments', icon: <Calendar className="w-5 h-5" /> },
+    { name: 'Patients / Pets', href: '/doctor/patients', icon: <Dog className="w-5 h-5" /> },
+    { name: 'Clinic Services', href: '/doctor/services', icon: <Sparkles className="w-5 h-5" /> },
+    { name: 'Vaccinations', href: '/doctor/vaccinations', icon: <Syringe className="w-5 h-5" /> },
+    { name: 'Medical Records', href: '/doctor/medical-records', icon: <FileText className="w-5 h-5" /> },
+    { name: 'Profile', href: '/doctor/profile', icon: <User className="w-5 h-5" /> },
+    { name: 'Settings', href: '/doctor/settings', icon: <Settings className="w-5 h-5" /> },
+  ];
+
+  const sidebarContent = (
+    <div className="flex flex-col h-full bg-white border-r border-[#E8ECF0]">
+      {/* Brand Header */}
+      <div className="flex items-center justify-between h-16 px-6 border-b border-[#E8ECF0]">
+        <Link href="/doctor/dashboard" className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#72CFF2] to-[#7567E8] flex items-center justify-center text-white shadow-xs">
+            <Stethoscope className="w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="font-extrabold text-[#25242A] text-base leading-none">PetCare Clinic</h1>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#72CFF2]">
+              Doctor Portal
+            </span>
+          </div>
+        </Link>
+        {onClose && (
+          <button onClick={onClose} className="lg:hidden p-1 text-[#737780] hover:text-[#25242A]">
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      {/* Navigation List */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+        {navItems.map((item) => {
+          const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onClose}
+              className={`relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
+                isActive
+                  ? 'bg-[#EAF8FE] text-[#0284C7]'
+                  : 'text-[#737780] hover:bg-[#F8FAFC] hover:text-[#25242A]'
+              }`}
+            >
+              {isActive && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-[#72CFF2]" />
+              )}
+              <span className={isActive ? 'text-[#0284C7]' : 'text-[#737780]'}>{item.icon}</span>
+              <span>{item.name}</span>
+            </Link>
+          );
+        })}
+      </div>
+
+      {/* Footer / Logout */}
+      <div className="p-4 border-t border-[#E8ECF0]">
+        <Link
+          href="/doctor-login"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-[#E46A6A] hover:bg-red-50 transition-colors"
+        >
+          <LogOut className="w-5 h-5" />
+          <span>Logout</span>
+        </Link>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <aside className="hidden lg:block w-64 fixed inset-y-0 left-0 z-30">
+        {sidebarContent}
+      </aside>
+
+      {isOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs" onClick={onClose} />
+          <div className="relative w-64 max-w-xs z-10 animate-in slide-in-from-left duration-200">
+            {sidebarContent}
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
