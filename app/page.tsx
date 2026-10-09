@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { PawPrint, ArrowRight, ShieldCheck, Stethoscope } from 'lucide-react';
+import { PawPrint, ArrowRight, ShieldCheck, Stethoscope, Crown } from 'lucide-react';
 
 export default function HomePage() {
   return (
@@ -162,11 +162,20 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* SUBTLE TRUST LINE */}
-        <div className="mt-6 sm:mt-8 text-center">
+        {/* SUBTLE TRUST LINE & SUPER ADMIN LINK */}
+        <div className="mt-6 sm:mt-8 text-center space-y-2">
           <p className="text-[11px] text-[#94A3B8] font-medium tracking-wide">
             Secure access for Healthy Paws Pet Clinic &nbsp;•&nbsp; Authorized staff only
           </p>
+          <div className="pt-1">
+            <Link
+              href="/super-admin-login"
+              className="inline-flex items-center gap-1.5 text-xs font-extrabold text-[#7567E8] bg-[#F1EEFF] px-3.5 py-1.5 rounded-full border border-[#7567E8]/20 hover:bg-[#7567E8] hover:text-white transition-all shadow-xs"
+            >
+              <Crown className="w-3.5 h-3.5" />
+              <span>Super Admin Portal</span>
+            </Link>
+          </div>
         </div>
       </main>
 

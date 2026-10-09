@@ -2,7 +2,9 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Menu, Bell, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { useAuth } from '@/lib/authContext';
 
 interface DoctorTopbarProps {
   onMenuToggle?: () => void;
@@ -11,6 +13,27 @@ interface DoctorTopbarProps {
 
 export const DoctorTopbar: React.FC<DoctorTopbarProps> = ({ onMenuToggle, title = 'Overview' }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const { user, profile, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    setIsDropdownOpen(false);
+    await logout();
+    router.replace('/doctor-login');
+  };
+
+  const displayName = profile?.fullName || user?.email || 'Doctor';
+  const displaySub = profile?.specialization || profile?.qualification || 'Veterinary Specialist';
+
+  const getInitials = (name: string) => {
+    if (!name) return 'D';
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
 
   return (
     <header className="h-16 bg-white border-b border-[#E8ECF0] sticky top-0 z-20 px-4 sm:px-6 flex items-center justify-between">
@@ -40,15 +63,21 @@ export const DoctorTopbar: React.FC<DoctorTopbarProps> = ({ onMenuToggle, title 
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
             className="flex items-center gap-2.5 p-1.5 hover:bg-[#F8FAFC] rounded-xl transition-colors text-left"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=100&auto=format&fit=crop"
-              alt="Dr. Ananya"
-              className="w-8 h-8 rounded-full object-cover border border-[#72CFF2]"
-            />
+            {profile?.photoURL ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={profile.photoURL}
+                alt={displayName}
+                className="w-8 h-8 rounded-full object-cover border border-[#72CFF2]"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-[#72CFF2] text-[#25242A] flex items-center justify-center font-bold text-xs border border-[#72CFF2]">
+                {getInitials(displayName)}
+              </div>
+            )}
             <div className="hidden sm:block text-left">
-              <p className="text-xs font-bold text-[#25242A] leading-tight">Dr. Ananya Sharma</p>
-              <p className="text-[10px] text-[#737780] font-medium">Veterinary Surgeon</p>
+              <p className="text-xs font-bold text-[#25242A] leading-tight">{displayName}</p>
+              <p className="text-[10px] text-[#737780] font-medium">{displaySub}</p>
             </div>
             <ChevronDown className="w-4 h-4 text-[#737780]" />
           </button>
@@ -70,13 +99,12 @@ export const DoctorTopbar: React.FC<DoctorTopbarProps> = ({ onMenuToggle, title 
                 <Settings className="w-4 h-4 text-[#737780]" /> Settings
               </Link>
               <div className="my-1 border-t border-[#E8ECF0]" />
-              <Link
-                href="/doctor-login"
-                onClick={() => setIsDropdownOpen(false)}
-                className="flex items-center gap-2.5 px-4 py-2 text-xs text-[#E46A6A] hover:bg-red-50 font-medium"
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-[#E46A6A] hover:bg-red-50 font-medium text-left"
               >
                 <LogOut className="w-4 h-4" /> Logout
-              </Link>
+              </button>
             </div>
           )}
         </div>

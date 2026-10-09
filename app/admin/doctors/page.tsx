@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -92,9 +93,11 @@ export default function AdminDoctorsPage() {
         title="Doctor Roster & Vets"
         subtitle="Manage clinic veterinary surgeons, qualifications, availability, and active profiles."
         action={
-          <Button onClick={() => handleOpenAdd()} icon={<Plus className="w-4 h-4" />}>
-            Add Doctor
-          </Button>
+          <Link href="/admin/doctors/create">
+            <Button icon={<Plus className="w-4 h-4" />}>
+              Create Doctor
+            </Button>
+          </Link>
         }
       />
 

@@ -10,20 +10,27 @@ export interface UserProfile {
   fullName: string;
   email: string;
   phone?: string;
-  role: 'admin' | 'doctor';
+  role: 'super_admin' | 'admin' | 'doctor';
+  status?: 'active' | 'inactive' | 'suspended';
   photoURL?: string | null;
   qualification?: string;
   specialization?: string;
   experience?: string;
   availability?: string;
-  createdAt?: string;
-  updatedAt?: string;
+  registrationNumber?: string;
+  permissions?: string[];
+  createdBy?: string;
+  createdAt?: any;
+  updatedAt?: any;
+  lastLoginAt?: any;
 }
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
+  isAuthenticated: boolean;
   loading: boolean;
+  setSessionUser: (prof: UserProfile) => void;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfileData: (data: Partial<UserProfile>) => Promise<void>;
@@ -32,7 +39,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   profile: null,
+  isAuthenticated: false,
   loading: true,
+  setSessionUser: () => {},
   logout: async () => {},
   refreshProfile: async () => {},
   updateProfileData: async () => {},
@@ -43,6 +52,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Helper to load stored session from sessionStorage if available
+  const getStoredSession = (): UserProfile | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = sessionStorage.getItem('hp_session_user');
+      if (stored) {
+        return JSON.parse(stored) as UserProfile;
+      }
+    } catch (e) {
+      console.warn('Could not read stored session profile:', e);
+    }
+    return null;
+  };
+
   const fetchProfile = async (uid: string) => {
     try {
       const userDocRef = doc(db, 'users', uid);
@@ -50,31 +73,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (docSnap.exists()) {
         const data = docSnap.data() as UserProfile;
         setProfile(data);
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('hp_session_user', JSON.stringify(data));
+        }
         return data;
       } else {
+        const stored = getStoredSession();
+        if (stored) {
+          setProfile(stored);
+          return stored;
+        }
         setProfile(null);
         return null;
       }
     } catch (error) {
-      console.error('Error fetching Firestore user profile:', error);
+      const stored = getStoredSession();
+      if (stored) {
+        setProfile(stored);
+        return stored;
+      }
       setProfile(null);
       return null;
     }
   };
 
   useEffect(() => {
+    // Initial stored session check
+    const stored = getStoredSession();
+    if (stored) {
+      setProfile(stored);
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
         await fetchProfile(firebaseUser.uid);
       } else {
-        setProfile(null);
+        const fallbackStored = getStoredSession();
+        if (fallbackStored) {
+          setProfile(fallbackStored);
+        } else {
+          setProfile(null);
+        }
       }
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
+
+  const setSessionUser = (prof: UserProfile) => {
+    setProfile(prof);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('hp_session_user', JSON.stringify(prof));
+    }
+  };
 
   const refreshProfile = async () => {
     if (user) {
@@ -83,18 +136,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateProfileData = async (data: Partial<UserProfile>) => {
-    if (!user) return;
+    if (!user && !profile) return;
     try {
-      // Security check: never allow client-side role mutations
       const { role, uid, ...safeData } = data;
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        ...safeData,
-        updatedAt: new Date().toISOString(),
-      });
-      await fetchProfile(user.uid);
+      if (user) {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          ...safeData,
+          updatedAt: new Date().toISOString(),
+        });
+        await fetchProfile(user.uid);
+      } else if (profile) {
+        const updated = { ...profile, ...safeData, updatedAt: new Date().toISOString() };
+        setSessionUser(updated);
+      }
     } catch (error) {
-      console.error('Error updating user profile in Firestore:', error);
+      console.error('Error updating user profile:', error);
       throw error;
     }
   };
@@ -102,20 +159,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await firebaseSignOut(auth);
+    } catch (error) {
+      // Ignore firebase sign out errors
+    } finally {
       setUser(null);
       setProfile(null);
-    } catch (error) {
-      console.error('Error signing out:', error);
-      throw error;
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('hp_session_user');
+      }
     }
   };
+
+  const isAuthenticated = !!user || !!profile;
 
   return (
     <AuthContext.Provider
       value={{
         user,
         profile,
+        isAuthenticated,
         loading,
+        setSessionUser,
         logout,
         refreshProfile,
         updateProfileData,

@@ -2,6 +2,8 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/authContext';
 import { Search, Bell, Menu, User, Settings, LogOut, ChevronDown } from 'lucide-react';
 
 interface AdminTopbarProps {
@@ -11,7 +13,24 @@ interface AdminTopbarProps {
 
 export const AdminTopbar: React.FC<AdminTopbarProps> = ({ onMenuToggle, title = 'Overview' }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [notificationsCount, setNotificationsCount] = useState(3);
+  const [notificationsCount] = useState(3);
+  const { profile, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    setIsDropdownOpen(false);
+    await logout();
+    router.replace('/admin-login');
+  };
+
+  const initials = profile?.fullName
+    ? profile.fullName
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .substring(0, 2)
+        .toUpperCase()
+    : 'AD';
 
   return (
     <header className="h-16 bg-white border-b border-[#E8ECF0] sticky top-0 z-20 px-4 sm:px-6 flex items-center justify-between">
@@ -60,11 +79,15 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({ onMenuToggle, title = 
             className="flex items-center gap-2.5 p-1.5 hover:bg-[#F8FAFC] rounded-xl transition-colors text-left"
           >
             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#7567E8] to-[#72CFF2] flex items-center justify-center text-white font-bold text-xs shadow-xs">
-              AD
+              {initials}
             </div>
             <div className="hidden sm:block text-left">
-              <p className="text-xs font-bold text-[#25242A] leading-tight">Admin User</p>
-              <p className="text-[10px] text-[#737780] font-medium">Administrator</p>
+              <p className="text-xs font-bold text-[#25242A] leading-tight">
+                {profile?.fullName || 'Administrator'}
+              </p>
+              <p className="text-[10px] text-[#737780] font-medium truncate max-w-[120px]">
+                {profile?.email || 'Administrator'}
+              </p>
             </div>
             <ChevronDown className="w-4 h-4 text-[#737780]" />
           </button>
@@ -86,13 +109,12 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({ onMenuToggle, title = 
                 <Settings className="w-4 h-4 text-[#737780]" /> Settings
               </Link>
               <div className="my-1 border-t border-[#E8ECF0]" />
-              <Link
-                href="/admin-login"
-                onClick={() => setIsDropdownOpen(false)}
-                className="flex items-center gap-2.5 px-4 py-2 text-xs text-[#E46A6A] hover:bg-red-50 font-medium"
+              <button
+                onClick={handleLogout}
+                className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-xs text-[#E46A6A] hover:bg-red-50 font-medium"
               >
                 <LogOut className="w-4 h-4" /> Logout
-              </Link>
+              </button>
             </div>
           )}
         </div>
