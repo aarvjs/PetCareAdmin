@@ -1,10 +1,17 @@
 import { Resend } from 'resend';
 
-const resendApiKey = process.env.RESEND_API_KEY || '';
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'Healthy Paws Pet Clinic <onboarding@resend.dev>';
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-const resend = new Resend(resendApiKey);
+function getResendClient(): Resend | null {
+  const key = process.env.RESEND_API_KEY;
+  if (!key || key.trim() === '') return null;
+  try {
+    return new Resend(key);
+  } catch (e) {
+    return null;
+  }
+}
 
 export interface SendAdminInvitationParams {
   toEmail: string;
@@ -27,8 +34,10 @@ export async function sendAdminInvitationEmail({
   createdByName = 'Super Admin',
   loginUrl = `${appUrl}/admin-login`,
 }: SendAdminInvitationParams): Promise<SendEmailResponse> {
-  if (!resendApiKey) {
-    console.error('[Email Service] Missing RESEND_API_KEY environment variable.');
+  const resend = getResendClient();
+
+  if (!resend) {
+    console.error('[Email Service] Missing or unconfigured RESEND_API_KEY environment variable.');
     return {
       success: false,
       error: 'RESEND_API_KEY is not configured on the server.',
