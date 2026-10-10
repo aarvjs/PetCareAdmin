@@ -228,7 +228,7 @@ export default function IndividualAdminPermissionsPage() {
         <div className="p-3 bg-[#FAFCFD] border border-[#E8ECF0] rounded-xl flex items-center justify-between text-xs">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20">
-              {currentAdmin.name.slice(0, 2).toUpperCase()}
+              {(currentAdmin.name || currentAdmin.email || 'Admin').slice(0, 2).toUpperCase()}
             </div>
             <div>
               <p className="font-bold text-[#25242A]">{currentAdmin.name}</p>

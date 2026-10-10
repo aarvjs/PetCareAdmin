@@ -128,12 +128,10 @@ export default function DoctorsListPage() {
           </p>
         </div>
 
-        <Link
-          href="/super-admin/doctors/create"
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white font-bold text-xs rounded-xl shadow-xs transition-all shrink-0"
-        >
-          <Plus className="w-4 h-4" /> Create New Doctor
-        </Link>
+        <div className="flex items-center gap-2 px-3.5 py-2 bg-[#EAF8FE] border border-[#0284C7]/20 rounded-xl text-xs font-bold text-[#0284C7] shrink-0">
+          <Stethoscope className="w-4 h-4 shrink-0 text-[#0284C7]" />
+          <span>Doctor Creation Delegated to Clinic Admins</span>
+        </div>
       </div>
 
       {/* Toast Notification */}
@@ -187,10 +185,8 @@ export default function DoctorsListPage() {
           description={
             searchQuery || statusFilter !== 'all'
               ? 'No doctor accounts match your search or filter criteria.'
-              : 'There are currently no veterinary doctors registered in the system.'
+              : 'There are currently no veterinary doctors registered in the system. Doctor accounts are created by Clinic Admins in the Admin Portal.'
           }
-          actionLabel="Create Doctor"
-          onAction={() => (window.location.href = '/super-admin/doctors/create')}
         />
       ) : (
         <div className="bg-white border border-[#E8ECF0] rounded-2xl overflow-hidden shadow-xs">
@@ -199,6 +195,7 @@ export default function DoctorsListPage() {
               <thead>
                 <tr className="bg-[#FAFCFD] border-b border-[#E8ECF0] text-[#777980] font-extrabold uppercase tracking-wider">
                   <th className="py-3.5 px-4">Doctor Name</th>
+                  <th className="py-3.5 px-4">Shop ID</th>
                   <th className="py-3.5 px-4">Specialization</th>
                   <th className="py-3.5 px-4">Email / Mobile</th>
                   <th className="py-3.5 px-4">Status</th>
@@ -212,13 +209,22 @@ export default function DoctorsListPage() {
                     <td className="py-3.5 px-4 font-bold text-[#25242A]">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-[#EAF8FE] text-[#0284C7] font-bold text-xs flex items-center justify-center border border-[#0284C7]/20 shrink-0">
-                          {docItem.fullName.slice(0, 2).toUpperCase()}
+                          {(docItem.fullName || docItem.email || 'Dr').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-bold text-[#25242A]">{docItem.fullName}</p>
+                          <p className="font-bold text-[#25242A]">{docItem.fullName || docItem.email || 'Doctor'}</p>
                           <p className="text-[10px] text-[#777980]">{docItem.qualification || 'BVSc & AH'}</p>
                         </div>
                       </div>
+                    </td>
+                    <td className="py-3.5 px-4 font-mono font-bold text-[#7567E8]">
+                      {docItem.shopId ? (
+                        <span className="bg-[#F1EEFF] px-2 py-0.5 rounded border border-[#7567E8]/20 text-[11px]">
+                          {docItem.shopId}
+                        </span>
+                      ) : (
+                        <span className="text-[#777980] text-[11px] font-sans font-normal">Unassigned</span>
+                      )}
                     </td>
                     <td className="py-3.5 px-4 text-[#0284C7] font-bold">
                       {docItem.specialization || 'Veterinary Surgeon'}

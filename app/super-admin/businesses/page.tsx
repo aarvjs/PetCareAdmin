@@ -85,6 +85,8 @@ export default function BusinessesManagementPage() {
   // Logo upload state
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
+  const [loadError, setLoadError] = useState('');
+
   // Registration Form
   const [formData, setFormData] = useState({
     name: '',
@@ -102,6 +104,7 @@ export default function BusinessesManagementPage() {
 
   const fetchBusinesses = async () => {
     setIsLoading(true);
+    setLoadError('');
     try {
       const res = await fetch('/api/super-admin/businesses');
       const data = await res.json();
@@ -109,11 +112,13 @@ export default function BusinessesManagementPage() {
         setBusinesses(data.businesses);
         setFilteredBusinesses(data.businesses);
       } else {
+        setLoadError(data.error || 'Failed to retrieve registered businesses from database.');
         setBusinesses([]);
         setFilteredBusinesses([]);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load businesses:', err);
+      setLoadError(err.message || 'Network error while fetching businesses.');
       setBusinesses([]);
       setFilteredBusinesses([]);
     } finally {
@@ -234,6 +239,9 @@ export default function BusinessesManagementPage() {
         return;
       }
 
+      if (data.business) {
+        setBusinesses((prev) => [data.business, ...prev.filter((b) => b.id !== data.business.id)]);
+      }
       setNewlyCreatedBiz(data.business);
       await fetchBusinesses();
     } catch (err: any) {
@@ -386,6 +394,21 @@ export default function BusinessesManagementPage() {
         </div>
       </div>
 
+      {loadError && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center justify-between text-xs text-red-600 font-bold animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <button
+            onClick={() => fetchBusinesses()}
+            className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Businesses Grid / Table */}
       {isLoading ? (
         <div className="bg-white border border-[#E8ECF0] rounded-2xl p-12 text-center text-xs text-[#777980] font-semibold flex items-center justify-center gap-2">
@@ -428,7 +451,7 @@ export default function BusinessesManagementPage() {
                         />
                       ) : (
                         <div className="w-12 h-12 rounded-xl bg-[#F1EEFF] text-[#7567E8] font-black text-sm flex items-center justify-center border border-[#7567E8]/20 shadow-xs">
-                          {biz.name.slice(0, 2).toUpperCase()}
+                          {(biz.name || 'Clinic').slice(0, 2).toUpperCase()}
                         </div>
                       )}
                       <div>
@@ -494,12 +517,24 @@ export default function BusinessesManagementPage() {
                       <Phone className="w-3.5 h-3.5 text-[#7567E8] shrink-0" />
                       <span>{biz.phone}</span>
                     </div>
+                    {biz.address && (
+                      <div className="flex items-center gap-2">
+                        <Building2 className="w-3.5 h-3.5 text-[#7567E8] shrink-0" />
+                        <span className="truncate">{biz.address}</span>
+                      </div>
+                    )}
                     {(biz.city || biz.state) && (
                       <div className="flex items-center gap-2">
                         <MapPin className="w-3.5 h-3.5 text-[#7567E8] shrink-0" />
                         <span className="truncate">
-                          {[biz.city, biz.state].filter(Boolean).join(', ')}
+                          {[biz.city, biz.state, biz.country].filter(Boolean).join(', ')}
                         </span>
+                      </div>
+                    )}
+                    {biz.createdAt && (
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-3.5 h-3.5 text-[#7567E8] shrink-0" />
+                        <span>Registered: {new Date(biz.createdAt).toLocaleDateString()}</span>
                       </div>
                     )}
                   </div>

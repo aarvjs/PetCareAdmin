@@ -29,17 +29,39 @@ export async function getServerAuthenticatedDb() {
   const app = existingApps.length > 0 ? existingApps[0] : initializeClientApp(firebaseConfig);
   const clientAuth = getClientAuth(app);
 
+  let userCred: any = null;
   try {
-    await signInWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
+    userCred = await signInWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
   } catch (e: any) {
     if (e.code === 'auth/invalid-credential' || e.code === 'auth/user-not-found') {
       try {
-        await createUserWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
+        userCred = await createUserWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
       } catch (ce) {}
     }
   }
 
-  serverAuthenticatedDbInstance = getClientFirestore(app);
+  const firestoreDb = getClientFirestore(app);
+  if (userCred?.user?.uid) {
+    try {
+      await setDoc(
+        doc(firestoreDb, 'users', userCred.user.uid),
+        {
+          uid: userCred.user.uid,
+          email: 'superadmin@healthypaws.in',
+          fullName: 'Super Administrator',
+          role: 'super_admin',
+          status: 'active',
+          permissions: ['ALL_ACCESS'],
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (profileErr) {
+      // ignore
+    }
+  }
+
+  serverAuthenticatedDbInstance = firestoreDb;
   return serverAuthenticatedDbInstance;
 }
 
@@ -425,4 +447,154 @@ export async function isRequestAuthorizedAsClinicAdmin(
   }
 
   return { authorized: true, uid: requesterUid };
+}
+
+/**
+ * Authorization verification for Doctor Creation Operations.
+ * CRITICAL MULTI-BUSINESS SECURITY RULES:
+ * 1. Super Admin must NOT create Doctor accounts or Doctor panel users.
+ * 2. Only an authorized Admin who has been assigned the Clinic / Doctor module can create Doctor accounts for that Admin's own business.
+ * 3. The Admin can create Doctors only for their own business. Never trust a client-supplied Shop ID without server-side validation.
+ * 4. Super Admin and E-commerce-only Admins are strictly rejected (HTTP 403).
+ */
+export async function isRequestAuthorizedForDoctorCreation(
+  request: Request,
+  body?: any
+): Promise<{
+  authorized: boolean;
+  error?: string;
+  status?: number;
+  admin?: any;
+  businessId?: string;
+  shopId?: string;
+}> {
+  const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+  let requesterUid = body?.requesterUid || body?.createdBy || request.headers.get('x-user-uid');
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim();
+    if (adminAuth && adminDb && hasServiceAccount()) {
+      try {
+        const decoded = await adminAuth.verifyIdToken(token);
+        requesterUid = decoded.uid;
+      } catch (e) {
+        // fallback
+      }
+    }
+  }
+
+  if (!requesterUid) {
+    return {
+      authorized: false,
+      error: 'Unauthorized: Authentication required to create Doctor accounts.',
+      status: 401,
+    };
+  }
+
+  let adminProfile: any = null;
+
+  if (hasServiceAccount() && adminDb) {
+    try {
+      const snap = await adminDb.collection('users').doc(requesterUid).get();
+      if (snap.exists) {
+        adminProfile = snap.data();
+      }
+    } catch (e) {}
+  }
+
+  if (!adminProfile) {
+    try {
+      const clientDb = getSharedClientFirestore();
+      const snap = await getDoc(doc(clientDb, 'users', requesterUid));
+      if (snap.exists()) {
+        adminProfile = snap.data();
+      }
+    } catch (e) {}
+  }
+
+  if (!adminProfile) {
+    return {
+      authorized: false,
+      error: 'Admin user profile not found in system.',
+      status: 403,
+    };
+  }
+
+  // 1. Strict Enforcement: Super Admin is strictly prohibited from creating Doctor accounts
+  if (adminProfile.role === 'super_admin') {
+    return {
+      authorized: false,
+      error: 'Super Admin is not permitted to create Doctor accounts. Doctor creation is exclusively restricted to authorized Clinic Admins for their assigned clinic.',
+      status: 403,
+    };
+  }
+
+  // 2. Strict Enforcement: Must be an Admin
+  if (adminProfile.role !== 'admin') {
+    return {
+      authorized: false,
+      error: 'Access Denied: Only authorized clinic administrators can create Doctor accounts.',
+      status: 403,
+    };
+  }
+
+  // 3. Strict Enforcement: Admin account must be active
+  if (adminProfile.status === 'inactive' || adminProfile.status === 'suspended') {
+    return {
+      authorized: false,
+      error: 'Your administrator account has been deactivated. Doctor creation is prohibited.',
+      status: 403,
+    };
+  }
+
+  // 4. Strict Enforcement: Must have the "clinic" module assigned
+  const modules: string[] = adminProfile.modules || [];
+  const permissions: string[] = adminProfile.permissions || [];
+  const hasClinicModule = modules.length > 0
+    ? modules.includes('clinic')
+    : permissions.includes('doctors') || permissions.includes('p_doctors');
+
+  if (!hasClinicModule) {
+    return {
+      authorized: false,
+      error: 'Access Denied: Your administrator account is assigned to E-commerce only. You do not possess Clinic / Doctor module permissions.',
+      status: 403,
+    };
+  }
+
+  // 5. Strict Enforcement: Admin must be bound to a registered business / Shop ID
+  const assignedBusinessId = adminProfile.businessId || '';
+  const assignedShopId = adminProfile.shopId || '';
+
+  if (!assignedBusinessId && !assignedShopId) {
+    return {
+      authorized: false,
+      error: 'Access Denied: Your administrator account is not assigned to any registered clinic business.',
+      status: 403,
+    };
+  }
+
+  // 6. Cross-Tenant Protection: Verify client did not attempt to supply a different shopId / businessId
+  if (body?.shopId && assignedShopId && body.shopId !== assignedShopId) {
+    return {
+      authorized: false,
+      error: 'Security Violation: You are not authorized to create Doctor accounts for another business or Shop ID.',
+      status: 403,
+    };
+  }
+
+  if (body?.businessId && assignedBusinessId && body.businessId !== assignedBusinessId) {
+    return {
+      authorized: false,
+      error: 'Security Violation: You cannot create Doctor accounts for another business entity.',
+      status: 403,
+    };
+  }
+
+  return {
+    authorized: true,
+    admin: adminProfile,
+    businessId: assignedBusinessId,
+    shopId: assignedShopId,
+  };
 }

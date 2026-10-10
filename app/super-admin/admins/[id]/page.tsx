@@ -86,16 +86,12 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
       });
 
       const userMods = data.modules || [];
-      const hasEcom =
-        userMods.includes('ecommerce') ||
-        (data.permissions || []).includes('products') ||
-        (data.permissions || []).includes('p_products') ||
-        userMods.length === 0;
-      const hasClinic =
-        userMods.includes('clinic') ||
-        (data.permissions || []).includes('doctors') ||
-        (data.permissions || []).includes('p_doctors') ||
-        userMods.length === 0;
+      const hasEcom = userMods.length > 0
+        ? userMods.includes('ecommerce')
+        : (data.permissions || []).includes('products') || (data.permissions || []).includes('p_products');
+      const hasClinic = userMods.length > 0
+        ? userMods.includes('clinic')
+        : (data.permissions || []).includes('doctors') || (data.permissions || []).includes('p_doctors');
 
       setModules({
         ecommerce: hasEcom,
@@ -233,7 +229,7 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E8ECF0]">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-[#F1EEFF] text-[#7567E8] font-bold text-xl flex items-center justify-center border border-[#7567E8]/20 shadow-xs">
-              {admin.fullName.slice(0, 2).toUpperCase()}
+              {(admin.fullName || admin.email || 'Admin').slice(0, 2).toUpperCase()}
             </div>
             <div>
               <h1 className="text-xl font-extrabold text-[#25242A] flex items-center gap-2">

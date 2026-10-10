@@ -231,7 +231,7 @@ export default function BusinessDetailPage({
               />
             ) : (
               <div className="w-16 h-16 rounded-2xl bg-[#F1EEFF] text-[#7567E8] font-black text-xl flex items-center justify-center border border-[#7567E8]/20 shadow-xs">
-                {business.name.slice(0, 2).toUpperCase()}
+                {(business.name || 'Clinic').slice(0, 2).toUpperCase()}
               </div>
             )}
             <div>
@@ -358,27 +358,23 @@ export default function BusinessDetailPage({
               <tbody className="divide-y divide-[#F1F5F9] font-medium text-[#25242A]">
                 {admins.map((adm) => {
                   const mods = adm.modules || [];
-                  const hasEcom =
-                    mods.includes('ecommerce') ||
-                    (adm.permissions || []).includes('products') ||
-                    (adm.permissions || []).includes('p_products') ||
-                    mods.length === 0;
-                  const hasClinic =
-                    mods.includes('clinic') ||
-                    (adm.permissions || []).includes('doctors') ||
-                    (adm.permissions || []).includes('p_doctors') ||
-                    mods.length === 0;
+                  const hasEcom = mods.length > 0
+                    ? mods.includes('ecommerce')
+                    : (adm.permissions || []).includes('products') || (adm.permissions || []).includes('p_products');
+                  const hasClinic = mods.length > 0
+                    ? mods.includes('clinic')
+                    : (adm.permissions || []).includes('doctors') || (adm.permissions || []).includes('p_doctors');
 
                   return (
                     <tr key={adm.uid} className="hover:bg-[#FAFCFD] transition-colors">
                       <td className="py-3.5 px-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-xl bg-[#F1EEFF] text-[#7567E8] font-bold flex items-center justify-center text-xs">
-                            {adm.fullName.slice(0, 2).toUpperCase()}
+                            {(adm.fullName || adm.email || 'Admin').slice(0, 2).toUpperCase()}
                           </div>
                           <div>
-                            <span className="font-extrabold text-xs block leading-tight">{adm.fullName}</span>
-                            <span className="text-[10px] font-mono text-[#777980]">{adm.uid.slice(0, 10)}...</span>
+                            <span className="font-extrabold text-xs block leading-tight">{adm.fullName || adm.email || 'Admin'}</span>
+                            <span className="text-[10px] font-mono text-[#777980]">{(adm.uid || '').slice(0, 10)}...</span>
                           </div>
                         </div>
                       </td>

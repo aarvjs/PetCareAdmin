@@ -36,6 +36,14 @@ export async function POST(req: Request) {
       );
     }
 
+    // Strict Multi-Business Rule: Super Admin must NOT create Doctor accounts
+    if (role === 'doctor') {
+      return NextResponse.json(
+        { error: 'Forbidden: Super Admin cannot create Doctor accounts. Doctor creation is strictly restricted to authorized Clinic Admins for their assigned clinic.' },
+        { status: 403 }
+      );
+    }
+
     // Default permissions based on role if not explicitly provided
     let defaultPermissions = permissions;
     if (!defaultPermissions || defaultPermissions.length === 0) {

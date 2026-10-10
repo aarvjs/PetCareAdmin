@@ -8,10 +8,29 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { validateEmail, validateIndianMobile, validatePassword } from '@/lib/validation';
-import { Stethoscope, ArrowLeft, User, Mail, Phone, Lock, Eye, EyeOff, Award, Clock, FileText, CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
+import { useAuth } from '@/lib/authContext';
+import {
+  Stethoscope,
+  ArrowLeft,
+  User,
+  Mail,
+  Phone,
+  Lock,
+  Eye,
+  EyeOff,
+  Award,
+  Clock,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
+  ShieldAlert,
+  Building2,
+  Loader2,
+} from 'lucide-react';
 
 export default function AdminCreateDoctorPage() {
   const router = useRouter();
+  const { user, profile } = useAuth();
 
   const [formData, setFormData] = useState({
     fullName: '',
@@ -23,14 +42,25 @@ export default function AdminCreateDoctorPage() {
     experience: '',
     password: '',
     confirmPassword: '',
-    status: 'Active',
+    status: 'active',
   });
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [validationSuccess, setValidationSuccess] = useState(false);
+  const [apiError, setApiError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Permission Checks
+  const isSuperAdmin = profile?.role === 'super_admin';
+  const mods = profile?.modules || [];
+  const perms = profile?.permissions || [];
+  const hasClinicModule =
+    profile?.role === 'admin' &&
+    (mods.length > 0
+      ? mods.includes('clinic')
+      : perms.includes('doctors') || perms.includes('p_doctors'));
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -38,14 +68,15 @@ export default function AdminCreateDoctorPage() {
     if (errors[name]) {
       setErrors((prev) => ({ ...prev, [name]: '' }));
     }
-    if (validationSuccess) {
-      setValidationSuccess(false);
+    if (apiError) {
+      setApiError('');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setValidationSuccess(false);
+    setApiError('');
+    setSuccessMessage('');
     const newErrors: Record<string, string> = {};
 
     if (!formData.fullName.trim()) {
@@ -61,7 +92,7 @@ export default function AdminCreateDoctorPage() {
     if (!formData.phone.trim()) {
       newErrors.phone = 'Mobile number is required.';
     } else if (!validateIndianMobile(formData.phone)) {
-      newErrors.phone = 'Enter a valid 10-digit Indian mobile number (e.g. 9415011223).';
+      newErrors.phone = 'Enter a valid 10-digit Indian mobile number.';
     }
 
     if (!formData.specialization.trim()) {
@@ -99,11 +130,104 @@ export default function AdminCreateDoctorPage() {
     }
 
     setIsLoading(true);
-    setTimeout(() => {
+
+    try {
+      const idToken = user ? await user.getIdToken() : '';
+      const res = await fetch('/api/admin/doctors', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          fullName: formData.fullName.trim(),
+          email: formData.email.trim().toLowerCase(),
+          phone: formData.phone.trim(),
+          specialization: formData.specialization.trim(),
+          qualification: formData.qualification.trim(),
+          registrationNumber: formData.registrationNumber.trim(),
+          experience: formData.experience.trim(),
+          password: formData.password,
+          status: formData.status,
+          businessId: profile?.businessId || '',
+          shopId: profile?.shopId || '',
+          createdBy: profile?.uid || user?.uid || 'admin',
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setApiError(data.error || 'Failed to create Doctor account.');
+        setIsLoading(false);
+        return;
+      }
+
+      setSuccessMessage(`Doctor account for ${formData.fullName} created successfully for Shop ID ${profile?.shopId || 'your clinic'}!`);
+
+      setTimeout(() => {
+        router.push('/admin/doctors');
+      }, 1500);
+    } catch (err: any) {
+      setApiError(err.message || 'Network error while creating doctor account.');
+    } finally {
       setIsLoading(false);
-      setValidationSuccess(true);
-    }, 600);
+    }
   };
+
+  // Guard: Super Admin is strictly blocked
+  if (isSuperAdmin) {
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto animate-in fade-in duration-200">
+        <div className="bg-white border border-[#E8ECF0] rounded-3xl p-8 text-center space-y-4 shadow-xs">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <h2 className="text-base font-extrabold text-[#25242A]">
+            Super Admin Doctor Creation Restricted
+          </h2>
+          <p className="text-xs text-[#777980] max-w-md mx-auto leading-relaxed">
+            Super Admins are not permitted to create Doctor accounts. Doctor creation is exclusively delegated to authorized Clinic Administrators for their respective clinics.
+          </p>
+          <div className="pt-2">
+            <Link
+              href="/admin/dashboard"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#7567E8] text-white rounded-xl text-xs font-bold hover:bg-[#6354D6]"
+            >
+              <ArrowLeft className="w-4 h-4" /> Return to Dashboard
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Guard: E-commerce only Admin is blocked
+  if (!hasClinicModule) {
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto animate-in fade-in duration-200">
+        <div className="bg-white border border-[#E8ECF0] rounded-3xl p-8 text-center space-y-4 shadow-xs">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <h2 className="text-base font-extrabold text-[#25242A]">
+            Clinic / Doctor Module Required
+          </h2>
+          <p className="text-xs text-[#777980] max-w-md mx-auto leading-relaxed">
+            Your administrator account is configured for E-commerce operations only. You do not have permissions to create or manage Doctor accounts.
+          </p>
+          <div className="pt-2">
+            <Link
+              href="/admin/dashboard"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#7567E8] text-white rounded-xl text-xs font-bold hover:bg-[#6354D6]"
+            >
+              <ArrowLeft className="w-4 h-4" /> Return to Dashboard
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto animate-in fade-in duration-200">
@@ -114,26 +238,52 @@ export default function AdminCreateDoctorPage() {
         >
           <ArrowLeft className="w-4 h-4" /> Back to Doctor Roster
         </Link>
-        <span className="text-xs font-bold text-[#0284C7] bg-[#EAF8FE] px-3 py-1 rounded-full border border-[#0284C7]/20">
-          Admin Portal • Create Doctor Interface
-        </span>
+        <div className="flex items-center gap-2">
+          {profile?.shopId && (
+            <span className="font-mono text-xs font-extrabold text-[#0284C7] bg-[#EAF8FE] px-3 py-1 rounded-full border border-[#0284C7]/20">
+              Clinic Shop ID: {profile.shopId}
+            </span>
+          )}
+        </div>
       </div>
 
       <PageHeader
         title="Create Doctor Account"
-        subtitle="Fill in veterinary practitioner credentials and clinical details for Doctor Portal access."
+        subtitle="Provision veterinary doctor portal credentials, license registration, and clinical specialization for your clinic."
       />
 
+      {/* Associated Clinic Notice */}
+      <div className="p-4 bg-[#F8FAFC] border border-[#E8ECF0] rounded-2xl flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-[#EAF8FE] text-[#0284C7] flex items-center justify-center border border-[#0284C7]/20">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <div>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#777980] block">
+              Assigned Clinic Business
+            </span>
+            <span className="font-bold text-xs text-[#25242A]">
+              Shop ID: {profile?.shopId || 'Your Clinic'} • Admin UID: {profile?.uid?.slice(0, 10)}...
+            </span>
+          </div>
+        </div>
+        <span className="text-[10px] font-extrabold uppercase text-[#0284C7] bg-[#EAF8FE] px-2.5 py-1 rounded-lg">
+          Clinic Module Active
+        </span>
+      </div>
+
       <Card>
-        {validationSuccess && (
-          <div className="mb-6 p-4 bg-[#EAF8FE] border border-[#0284C7]/30 rounded-2xl flex items-start gap-3 text-[#0284C7] text-xs font-semibold animate-in fade-in">
-            <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-extrabold text-sm">Client-Side Form Validation Passed!</p>
-              <p className="mt-0.5 text-xs text-[#0284C7]/90">
-                Form inputs are valid. The submission handler is ready for future backend & authentication integration.
-              </p>
-            </div>
+        {apiError && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-600 text-xs font-bold animate-in fade-in">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>{apiError}</span>
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="mb-6 p-4 bg-[#EAF8FE] border border-[#0284C7]/30 rounded-2xl flex items-center gap-3 text-[#0284C7] text-xs font-semibold animate-in fade-in">
+            <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+            <span>{successMessage}</span>
           </div>
         )}
 
@@ -262,10 +412,10 @@ export default function AdminCreateDoctorPage() {
               name="status"
               value={formData.status}
               onChange={handleChange}
-              className="w-full bg-white border border-[#E8ECF0] focus:border-[#0284C7] px-4 py-2.5 rounded-xl font-semibold text-[#25242A] outline-hidden"
+              className="w-full bg-white border border-[#E8ECF0] focus:border-[#0284C7] px-4 py-2.5 rounded-xl font-semibold text-[#25242A] outline-hidden cursor-pointer"
             >
-              <option value="Active">Active (Granted Access)</option>
-              <option value="Inactive">Inactive (Disabled Access)</option>
+              <option value="active">Active (Granted Access)</option>
+              <option value="inactive">Inactive (Disabled Access)</option>
             </select>
           </div>
 
@@ -282,7 +432,7 @@ export default function AdminCreateDoctorPage() {
               isLoading={isLoading}
               className="bg-[#0284C7] text-white hover:bg-[#0369A1] font-bold"
             >
-              Validate & Create Doctor
+              Create Doctor Account
             </Button>
           </div>
         </form>

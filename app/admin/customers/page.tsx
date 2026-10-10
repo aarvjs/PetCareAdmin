@@ -60,7 +60,7 @@ export default function AdminCustomersPage() {
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-[#F1EEFF] text-[#7567E8] flex items-center justify-center font-bold text-xs">
-                        {cust.name.slice(0, 2).toUpperCase()}
+                        {(cust.name || cust.email || 'Customer').slice(0, 2).toUpperCase()}
                       </div>
                       <div>
                         <p className="font-bold text-[#25242A]">{cust.name}</p>
@@ -106,7 +106,7 @@ export default function AdminCustomersPage() {
           <div className="space-y-4 text-xs">
             <div className="flex items-center gap-4 p-4 bg-[#F1EEFF] rounded-2xl">
               <div className="w-12 h-12 rounded-full bg-[#7567E8] text-white flex items-center justify-center font-bold text-base">
-                {selectedCustomer.name.slice(0, 2).toUpperCase()}
+                {(selectedCustomer.name || selectedCustomer.email || 'Customer').slice(0, 2).toUpperCase()}
               </div>
               <div>
                 <h3 className="text-base font-bold text-[#25242A]">{selectedCustomer.name}</h3>

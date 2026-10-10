@@ -246,26 +246,22 @@ export default function AdminsListPage() {
               <tbody className="divide-y divide-[#E8ECF0]">
                 {filteredAdmins.map((admin) => {
                   const mods = admin.modules || [];
-                  const hasEcom =
-                    mods.includes('ecommerce') ||
-                    (admin.permissions || []).includes('products') ||
-                    (admin.permissions || []).includes('p_products') ||
-                    mods.length === 0;
-                  const hasClinic =
-                    mods.includes('clinic') ||
-                    (admin.permissions || []).includes('doctors') ||
-                    (admin.permissions || []).includes('p_doctors') ||
-                    mods.length === 0;
+                  const hasEcom = mods.length > 0
+                    ? mods.includes('ecommerce')
+                    : (admin.permissions || []).includes('products') || (admin.permissions || []).includes('p_products');
+                  const hasClinic = mods.length > 0
+                    ? mods.includes('clinic')
+                    : (admin.permissions || []).includes('doctors') || (admin.permissions || []).includes('p_doctors');
 
                   return (
                     <tr key={admin.uid} className="hover:bg-[#FAFCFD] transition-colors">
                       <td className="py-3.5 px-4 font-bold text-[#25242A]">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20 shrink-0">
-                            {admin.fullName.slice(0, 2).toUpperCase()}
+                            {(admin.fullName || admin.email || 'Admin').slice(0, 2).toUpperCase()}
                           </div>
                           <div>
-                            <span className="block leading-tight">{admin.fullName}</span>
+                            <span className="block leading-tight">{admin.fullName || admin.email || 'Admin'}</span>
                             <span className="text-[10px] text-[#777980] font-normal">{admin.email}</span>
                           </div>
                         </div>

@@ -299,7 +299,7 @@ export default function SuperAdminDashboardPage() {
                   <div key={admin.uid} className="py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20">
-                        {admin.fullName.slice(0, 2).toUpperCase()}
+                        {(admin.fullName || admin.email || 'Admin').slice(0, 2).toUpperCase()}
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[#25242A]">{admin.fullName}</p>
@@ -341,9 +341,7 @@ export default function SuperAdminDashboardPage() {
               <EmptyState
                 icon={Stethoscope}
                 title="No Doctor Accounts Found"
-                description="Register veterinary doctors to grant clinical portal access."
-                actionLabel="Create Doctor"
-                onAction={() => (window.location.href = '/super-admin/doctors/create')}
+                description="Doctor accounts are created and managed by authorized Clinic Admins."
               />
             ) : (
               <div className="divide-y divide-[#E8ECF0]">
@@ -351,7 +349,7 @@ export default function SuperAdminDashboardPage() {
                   <div key={doc.uid} className="py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-[#EAF8FE] text-[#0284C7] font-bold text-xs flex items-center justify-center border border-[#0284C7]/20">
-                        {doc.fullName.slice(0, 2).toUpperCase()}
+                        {(doc.fullName || doc.email || 'Doctor').slice(0, 2).toUpperCase()}
                       </div>
                       <div>
                         <p className="text-xs font-bold text-[#25242A]">{doc.fullName}</p>

@@ -22,7 +22,17 @@ export default function AllUsersDirectoryPage() {
       const snap = await getDocs(collection(db, 'users'));
       const list: UserProfile[] = [];
       snap.forEach((docSnap) => {
-        list.push(docSnap.data() as UserProfile);
+        const data = docSnap.data() as any;
+        // Ignore business records or malformed documents
+        if (data && !data.isBusinessDoc && data.role !== 'business' && data.role !== 'business_tenant') {
+          list.push({
+            ...data,
+            uid: data.uid || docSnap.id,
+            fullName: data.fullName || data.name || data.email?.split('@')[0] || 'User',
+            email: data.email || 'No email',
+            role: data.role || 'customer',
+          } as UserProfile);
+        }
       });
       setUsers(list);
       setFilteredUsers(list);
@@ -44,8 +54,8 @@ export default function AllUsersDirectoryPage() {
       const q = searchQuery.toLowerCase();
       result = result.filter(
         (u) =>
-          u.fullName.toLowerCase().includes(q) ||
-          u.email.toLowerCase().includes(q) ||
+          (u.fullName || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q) ||
           (u.phone && u.phone.includes(q))
       );
     }
@@ -156,9 +166,9 @@ export default function AllUsersDirectoryPage() {
                     <td className="py-3.5 px-4 font-bold text-[#25242A]">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20 shrink-0">
-                          {u.fullName.slice(0, 2).toUpperCase()}
+                          {(u.fullName || u.email || 'User').slice(0, 2).toUpperCase()}
                         </div>
-                        <span>{u.fullName}</span>
+                        <span>{u.fullName || u.email || 'User'}</span>
                       </div>
                     </td>
                     <td className="py-3.5 px-4">{renderRoleBadge(u.role)}</td>

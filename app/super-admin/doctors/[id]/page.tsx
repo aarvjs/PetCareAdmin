@@ -145,7 +145,7 @@ export default function DoctorDetailPage({ params }: { params: Promise<{ id: str
       <div className="bg-white border border-[#E8ECF0] rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
         <div className="flex items-center gap-4 pb-6 border-b border-[#E8ECF0]">
           <div className="w-16 h-16 rounded-2xl bg-[#EAF8FE] text-[#0284C7] font-bold text-xl flex items-center justify-center border border-[#0284C7]/20 shadow-xs">
-            {doctor.fullName.slice(0, 2).toUpperCase()}
+            {(doctor.fullName || doctor.email || 'Dr').slice(0, 2).toUpperCase()}
           </div>
           <div>
             <h1 className="text-xl font-extrabold text-[#25242A] flex items-center gap-2">
