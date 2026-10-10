@@ -33,11 +33,16 @@ export async function GET(request: Request) {
       }
     }
 
+    const shopId = searchParams.get('shopId');
+
     if (category && category !== 'All') {
       products = products.filter((p: any) => p.category === category);
     }
     if (petType && petType !== 'All') {
       products = products.filter((p: any) => p.petType === petType || p.suitableAnimal === petType);
+    }
+    if (shopId && shopId !== 'All') {
+      products = products.filter((p: any) => !p.shopId || p.shopId === shopId);
     }
     if (status && status !== 'All') {
       if (status === 'Published' || status === 'Active') {
@@ -202,6 +207,8 @@ export async function POST(request: Request) {
       isPublished: !!isPublished,
       isFeatured: !!isFeatured,
       isBestSeller: !!isBestSeller,
+      shopId: authCheck.shopId || body.shopId || '',
+      businessId: authCheck.businessId || body.businessId || '',
       createdBy: createdByUid,
       createdAt: now,
       updatedAt: now,

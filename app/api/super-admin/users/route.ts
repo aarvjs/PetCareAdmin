@@ -110,7 +110,21 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const body = await req.json();
-    const { uid, status, permissions, fullName, phone, qualification, specialization, experience, availability, registrationNumber } = body;
+    const {
+      uid,
+      status,
+      permissions,
+      modules,
+      businessId,
+      shopId,
+      fullName,
+      phone,
+      qualification,
+      specialization,
+      experience,
+      availability,
+      registrationNumber,
+    } = body;
 
     // Explicit Super Admin authorization check
     const authCheck = await isRequestAuthorizedAsSuperAdmin(req, body);
@@ -125,16 +139,21 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: 'UID is required.' }, { status: 400 });
     }
 
-    if (!adminDb) {
-      return NextResponse.json({ error: 'Server Admin SDK not initialized.' }, { status: 500 });
-    }
-
     const updateData: Record<string, any> = {
       updatedAt: new Date().toISOString(),
     };
 
     if (status !== undefined) updateData.status = status;
     if (permissions !== undefined) updateData.permissions = permissions;
+    if (modules !== undefined && Array.isArray(modules)) {
+      const allowed = ['ecommerce', 'clinic'];
+      const filtered = modules.filter((m: string) => allowed.includes(m));
+      if (filtered.length > 0) {
+        updateData.modules = filtered;
+      }
+    }
+    if (businessId !== undefined) updateData.businessId = businessId;
+    if (shopId !== undefined) updateData.shopId = shopId;
     if (fullName !== undefined) updateData.fullName = fullName.trim();
     if (phone !== undefined) updateData.phone = phone.trim();
     if (qualification !== undefined) updateData.qualification = qualification.trim();
@@ -143,7 +162,14 @@ export async function PUT(req: Request) {
     if (availability !== undefined) updateData.availability = availability.trim();
     if (registrationNumber !== undefined) updateData.registrationNumber = registrationNumber.trim();
 
-    await adminDb.collection('users').doc(uid).update(updateData);
+    if (adminDb) {
+      await adminDb.collection('users').doc(uid).update(updateData);
+    } else {
+      const { getSharedClientFirestore } = await import('@/lib/firebaseAdmin');
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const clientDb = getSharedClientFirestore();
+      await updateDoc(doc(clientDb, 'users', uid), updateData);
+    }
 
     return NextResponse.json({
       success: true,

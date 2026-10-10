@@ -17,6 +17,7 @@ import {
   X,
   PawPrint,
   Crown,
+  Building2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 
@@ -54,6 +55,7 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ isOpen = f
     {
       groupName: 'ACCESS MANAGEMENT',
       items: [
+        { name: 'Businesses', href: '/super-admin/businesses', icon: <Building2 className="w-4 h-4" /> },
         { name: 'Admins', href: '/super-admin/admins', icon: <ShieldCheck className="w-4 h-4" /> },
         { name: 'Doctors', href: '/super-admin/doctors', icon: <Stethoscope className="w-4 h-4" /> },
         { name: 'All Users', href: '/super-admin/users', icon: <Users className="w-4 h-4" /> },

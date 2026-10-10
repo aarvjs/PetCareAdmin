@@ -43,7 +43,7 @@ interface NavGroup {
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onClose }) => {
   const pathname = usePathname();
   const router = useRouter();
-  const { logout } = useAuth();
+  const { profile, logout } = useAuth();
 
   const handleLogout = async () => {
     if (onClose) onClose();
@@ -51,33 +51,61 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
     router.replace('/admin-login');
   };
 
+  const isSuper = profile?.role === 'super_admin';
+  const mods = profile?.modules || [];
+  const perms = profile?.permissions || [];
+
+  const hasEcommerce =
+    isSuper ||
+    mods.includes('ecommerce') ||
+    perms.includes('products') ||
+    perms.includes('p_products') ||
+    perms.includes('ALL_ACCESS') ||
+    (mods.length === 0 && perms.length === 0);
+
+  const hasClinic =
+    isSuper ||
+    mods.includes('clinic') ||
+    perms.includes('doctors') ||
+    perms.includes('p_doctors') ||
+    perms.includes('ALL_ACCESS') ||
+    (mods.length === 0 && perms.length === 0);
+
   const navGroups: NavGroup[] = [
     {
       items: [
         { name: 'Dashboard', href: '/admin/dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
       ],
     },
-    {
-      groupName: 'SHOP MANAGEMENT',
-      items: [
-        { name: 'Products', href: '/admin/products', icon: <ShoppingBag className="w-5 h-5" /> },
-        { name: 'Categories', href: '/admin/categories', icon: <FolderTree className="w-5 h-5" /> },
-        { name: 'Orders', href: '/admin/orders', icon: <ShoppingCart className="w-5 h-5" /> },
-        { name: 'Customers', href: '/admin/customers', icon: <Users className="w-5 h-5" /> },
-        { name: 'Inventory', href: '/admin/inventory', icon: <Boxes className="w-5 h-5" /> },
-        { name: 'Offers / Coupons', href: '/admin/offers', icon: <Tag className="w-5 h-5" /> },
-      ],
-    },
-    {
-      groupName: 'CLINIC MANAGEMENT',
-      items: [
-        { name: 'Doctors', href: '/admin/doctors', icon: <Stethoscope className="w-5 h-5" /> },
-        { name: 'Clinic Services', href: '/admin/services', icon: <Sparkles className="w-5 h-5" /> },
-        { name: 'Vaccinations', href: '/admin/vaccinations', icon: <Syringe className="w-5 h-5" /> },
-        { name: 'Appointments', href: '/admin/appointments', icon: <Calendar className="w-5 h-5" /> },
-        { name: 'Pets / Patients', href: '/admin/pets', icon: <Dog className="w-5 h-5" /> },
-      ],
-    },
+    ...(hasEcommerce
+      ? [
+          {
+            groupName: 'SHOP MANAGEMENT',
+            items: [
+              { name: 'Products', href: '/admin/products', icon: <ShoppingBag className="w-5 h-5" /> },
+              { name: 'Categories', href: '/admin/categories', icon: <FolderTree className="w-5 h-5" /> },
+              { name: 'Orders', href: '/admin/orders', icon: <ShoppingCart className="w-5 h-5" /> },
+              { name: 'Customers', href: '/admin/customers', icon: <Users className="w-5 h-5" /> },
+              { name: 'Inventory', href: '/admin/inventory', icon: <Boxes className="w-5 h-5" /> },
+              { name: 'Offers / Coupons', href: '/admin/offers', icon: <Tag className="w-5 h-5" /> },
+            ],
+          },
+        ]
+      : []),
+    ...(hasClinic
+      ? [
+          {
+            groupName: 'CLINIC MANAGEMENT',
+            items: [
+              { name: 'Doctors', href: '/admin/doctors', icon: <Stethoscope className="w-5 h-5" /> },
+              { name: 'Clinic Services', href: '/admin/services', icon: <Sparkles className="w-5 h-5" /> },
+              { name: 'Vaccinations', href: '/admin/vaccinations', icon: <Syringe className="w-5 h-5" /> },
+              { name: 'Appointments', href: '/admin/appointments', icon: <Calendar className="w-5 h-5" /> },
+              { name: 'Pets / Patients', href: '/admin/pets', icon: <Dog className="w-5 h-5" /> },
+            ],
+          },
+        ]
+      : []),
     {
       groupName: 'CONTENT',
       items: [
@@ -104,9 +132,16 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
           </div>
           <div>
             <h1 className="font-extrabold text-[#25242A] text-base leading-none">PetCare</h1>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[#7567E8]">
-              Admin Panel
-            </span>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#7567E8]">
+                Admin Panel
+              </span>
+              {profile?.shopId && (
+                <span className="font-mono text-[9px] font-extrabold text-[#7567E8] bg-[#F1EEFF] px-1.5 py-0.2 rounded border border-[#7567E8]/20">
+                  {profile.shopId}
+                </span>
+              )}
+            </div>
           </div>
         </Link>
         {onClose && (

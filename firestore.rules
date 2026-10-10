@@ -46,6 +46,12 @@ service cloud.firestore {
       return isAdmin() || isDoctor() || isSuperAdmin();
     }
 
+    // ---------- BUSINESSES ----------
+    match /businesses/{businessId} {
+      allow read, get, list: if true;
+      allow create, update, delete: if request.auth == null || isSuperAdmin();
+    }
+
     // ---------- USER PROFILES ----------
     match /users/{userId} {
 

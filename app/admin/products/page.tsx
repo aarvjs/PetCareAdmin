@@ -58,13 +58,16 @@ export default function AdminProductsPage() {
     if (!profile) return true; // fallback while loading
     if (profile.role === 'super_admin') return true;
     if (profile.role === 'admin') {
+      const mods = profile.modules || [];
       const perms = profile.permissions || [];
       if (
-        perms.length === 0 ||
-        perms.includes('products') ||
-        perms.includes('p_products') ||
-        perms.includes('dashboard') ||
-        perms.includes('ALL_ACCESS')
+        mods.includes('ecommerce') ||
+        (mods.length === 0 &&
+          (perms.length === 0 ||
+            perms.includes('products') ||
+            perms.includes('p_products') ||
+            perms.includes('dashboard') ||
+            perms.includes('ALL_ACCESS')))
       ) {
         return true;
       }
@@ -439,6 +442,8 @@ export default function AdminProductsPage() {
       const payload = {
         ...formData,
         isPublished: forceDraft ? false : formData.isPublished,
+        shopId: profile?.shopId || selectedProduct?.shopId || '',
+        businessId: profile?.businessId || selectedProduct?.businessId || '',
         createdBy: profile?.uid || user?.uid || 'admin',
       };
 
@@ -515,6 +520,8 @@ export default function AdminProductsPage() {
         isPublished: forceDraft ? false : !!formData.isPublished,
         isFeatured: !!formData.isFeatured,
         isBestSeller: !!formData.isBestSeller,
+        shopId: profile?.shopId || selectedProduct?.shopId || '',
+        businessId: profile?.businessId || selectedProduct?.businessId || '',
         createdBy: profile?.uid || user?.uid || 'admin',
         createdAt: selectedProduct?.createdAt || now,
         updatedAt: now,

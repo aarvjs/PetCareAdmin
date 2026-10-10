@@ -20,6 +20,9 @@ import {
   CheckCircle2,
   AlertCircle,
   Eye,
+  ShoppingBag,
+  Stethoscope,
+  Building2,
 } from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
 
@@ -94,7 +97,8 @@ export default function AdminsListPage() {
         (a) =>
           a.fullName.toLowerCase().includes(q) ||
           a.email.toLowerCase().includes(q) ||
-          (a.phone && a.phone.includes(q))
+          (a.phone && a.phone.includes(q)) ||
+          (a.shopId && a.shopId.toLowerCase().includes(q))
       );
     }
 
@@ -229,35 +233,82 @@ export default function AdminsListPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#FAFCFD] border-b border-[#E8ECF0] text-[#777980] font-extrabold uppercase tracking-wider">
+                <tr className="bg-[#FAFCFD] border-b border-[#E8ECF0] text-[#777980] font-extrabold uppercase tracking-wider text-[10px]">
                   <th className="py-3.5 px-4">Admin Name</th>
-                  <th className="py-3.5 px-4">Email</th>
-                  <th className="py-3.5 px-4">Mobile</th>
+                  <th className="py-3.5 px-4">Shop ID</th>
+                  <th className="py-3.5 px-4">Assigned Modules</th>
+                  <th className="py-3.5 px-4">Contact</th>
                   <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-4">Created At</th>
                   <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8ECF0]">
-                {filteredAdmins.map((admin) => (
-                  <tr key={admin.uid} className="hover:bg-[#FAFCFD] transition-colors">
-                    <td className="py-3.5 px-4 font-bold text-[#25242A]">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20 shrink-0">
-                          {admin.fullName.slice(0, 2).toUpperCase()}
+                {filteredAdmins.map((admin) => {
+                  const mods = admin.modules || [];
+                  const hasEcom =
+                    mods.includes('ecommerce') ||
+                    (admin.permissions || []).includes('products') ||
+                    (admin.permissions || []).includes('p_products') ||
+                    mods.length === 0;
+                  const hasClinic =
+                    mods.includes('clinic') ||
+                    (admin.permissions || []).includes('doctors') ||
+                    (admin.permissions || []).includes('p_doctors') ||
+                    mods.length === 0;
+
+                  return (
+                    <tr key={admin.uid} className="hover:bg-[#FAFCFD] transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-[#25242A]">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-[#F1EEFF] text-[#7567E8] font-bold text-xs flex items-center justify-center border border-[#7567E8]/20 shrink-0">
+                            {admin.fullName.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="block leading-tight">{admin.fullName}</span>
+                            <span className="text-[10px] text-[#777980] font-normal">{admin.email}</span>
+                          </div>
                         </div>
-                        <span>{admin.fullName}</span>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-[#777980] font-medium">{admin.email}</td>
-                    <td className="py-3.5 px-4 text-[#777980] font-medium">{admin.phone || 'Not added'}</td>
-                    <td className="py-3.5 px-4">
-                      <UserStatusBadge status={admin.status || 'active'} />
-                    </td>
-                    <td className="py-3.5 px-4 text-[#777980] font-medium">
-                      {admin.createdAt ? new Date(admin.createdAt).toLocaleDateString() : 'N/A'}
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        {admin.shopId ? (
+                          <span className="font-mono font-bold text-[11px] text-[#7567E8] bg-[#F1EEFF] px-2 py-0.5 rounded-md border border-[#7567E8]/20">
+                            {admin.shopId}
+                          </span>
+                        ) : (
+                          <span className="text-[#777980] text-[11px]">Unassigned</span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {hasEcom && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#E6F7F0] text-[#059669] border border-[#10B981]/20">
+                              <ShoppingBag className="w-3 h-3" /> E-commerce
+                            </span>
+                          )}
+                          {hasClinic && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#EAF8FE] text-[#0284C7] border border-[#8ED8F8]/40">
+                              <Stethoscope className="w-3 h-3" /> Clinic
+                            </span>
+                          )}
+                          {!hasEcom && !hasClinic && (
+                            <span className="text-[10px] text-red-500 font-bold">None</span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-[#777980] font-medium text-[11px]">
+                        {admin.phone || 'No phone'}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <UserStatusBadge status={admin.status || 'active'} />
+                      </td>
+                      <td className="py-3.5 px-4 text-[#777980] font-medium text-[11px]">
+                        {admin.createdAt ? new Date(admin.createdAt).toLocaleDateString() : 'N/A'}
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <Link
                           href={`/super-admin/admins/${admin.uid}`}
@@ -293,7 +344,8 @@ export default function AdminsListPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
           </div>

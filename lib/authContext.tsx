@@ -19,6 +19,9 @@ export interface UserProfile {
   availability?: string;
   registrationNumber?: string;
   permissions?: string[];
+  shopId?: string;
+  businessId?: string;
+  modules?: ('ecommerce' | 'clinic')[];
   createdBy?: string;
   createdAt?: any;
   updatedAt?: any;

@@ -4,66 +4,54 @@ import React, { useState, useEffect, use } from 'react';
 import Link from 'next/link';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { UserProfile } from '@/lib/authContext';
+import { UserProfile, useAuth } from '@/lib/authContext';
 import { UserStatusBadge } from '@/components/super-admin/UserStatusBadge';
-import { ArrowLeft, ShieldCheck, Mail, Phone, User, Save, CheckCircle2, AlertCircle, KeyRound, Check } from 'lucide-react';
+import {
+  ArrowLeft,
+  ShieldCheck,
+  Mail,
+  Phone,
+  User,
+  Save,
+  CheckCircle2,
+  AlertCircle,
+  Building2,
+  ShoppingBag,
+  Stethoscope,
+  Check,
+  Copy,
+  Loader2,
+} from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
-
-const SAMPLE_ADMINS_MAP: Record<string, UserProfile> = {
-  'adm-001': {
-    uid: 'adm-001',
-    fullName: 'Vikram Sharma',
-    email: 'admin.vikram@petcare.in',
-    phone: '+91 98765 43210',
-    role: 'admin',
-    status: 'active',
-    createdAt: '2026-01-15T10:00:00Z',
-    permissions: ['p_products', 'p_categories', 'p_orders', 'p_inventory', 'p_offers', 'p_doctors', 'p_services', 'p_appointments', 'p_vaccinations', 'p_pets', 'p_banners', 'p_reports'],
-  },
-  'adm-002': {
-    uid: 'adm-002',
-    fullName: 'Meera Patel',
-    email: 'admin.meera@petcare.in',
-    phone: '+91 98765 11223',
-    role: 'admin',
-    status: 'active',
-    createdAt: '2026-02-01T10:00:00Z',
-    permissions: ['p_doctors', 'p_services', 'p_appointments', 'p_vaccinations', 'p_pets', 'p_notifications', 'p_reports'],
-  },
-};
-
-const MODULE_OPTIONS = [
-  { id: 'p_products', name: 'Products Management', category: 'SHOP' },
-  { id: 'p_categories', name: 'Category Catalog', category: 'SHOP' },
-  { id: 'p_orders', name: 'Order Processing', category: 'SHOP' },
-  { id: 'p_inventory', name: 'Stock & Inventory Control', category: 'SHOP' },
-  { id: 'p_offers', name: 'Discounts & Coupons', category: 'SHOP' },
-  { id: 'p_doctors', name: 'Doctor Roster Management', category: 'CLINIC' },
-  { id: 'p_services', name: 'Clinic Services Setup', category: 'CLINIC' },
-  { id: 'p_appointments', name: 'Appointments Schedule', category: 'CLINIC' },
-  { id: 'p_vaccinations', name: 'Vaccination Protocols', category: 'CLINIC' },
-  { id: 'p_pets', name: 'Pet Patient Records', category: 'CLINIC' },
-  { id: 'p_banners', name: 'App Banners & Sliders', category: 'CONTENT' },
-  { id: 'p_reports', name: 'Financial & Sales Reports', category: 'DATA' },
-];
 
 export default function AdminDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const adminId = resolvedParams.id;
+  const { user: currentSuperAdmin } = useAuth();
 
   const [admin, setAdmin] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [copiedShopId, setCopiedShopId] = useState(false);
 
   const [formData, setFormData] = useState({
     fullName: '',
     phone: '',
     status: 'active' as 'active' | 'inactive' | 'suspended',
+    shopId: '',
+    businessId: '',
   });
 
-  const [selectedPermissions, setSelectedPermissions] = useState<Record<string, boolean>>({});
+  // Exactly Two Module Options: E-commerce and Clinic / Doctor
+  const [modules, setModules] = useState<{
+    ecommerce: boolean;
+    clinic: boolean;
+  }>({
+    ecommerce: true,
+    clinic: true,
+  });
 
   const fetchAdminDetail = async () => {
     setIsLoading(true);
@@ -75,8 +63,6 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
 
       if (snap.exists()) {
         data = snap.data() as UserProfile;
-      } else if (SAMPLE_ADMINS_MAP[adminId]) {
-        data = SAMPLE_ADMINS_MAP[adminId];
       } else {
         data = {
           uid: adminId,
@@ -85,7 +71,8 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
           phone: '+91 98765 43210',
           role: 'admin',
           status: 'active',
-          permissions: ['p_products', 'p_orders', 'p_doctors', 'p_appointments'],
+          shopId: 'SHOP-DEFAULT',
+          modules: ['ecommerce', 'clinic'],
         };
       }
 
@@ -94,29 +81,44 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
         fullName: data.fullName || '',
         phone: data.phone || '',
         status: data.status || 'active',
+        shopId: data.shopId || '',
+        businessId: data.businessId || '',
       });
 
-      const initialPerms: Record<string, boolean> = {};
-      MODULE_OPTIONS.forEach((m) => {
-        initialPerms[m.id] = (data.permissions || []).includes(m.id);
+      const userMods = data.modules || [];
+      const hasEcom =
+        userMods.includes('ecommerce') ||
+        (data.permissions || []).includes('products') ||
+        (data.permissions || []).includes('p_products') ||
+        userMods.length === 0;
+      const hasClinic =
+        userMods.includes('clinic') ||
+        (data.permissions || []).includes('doctors') ||
+        (data.permissions || []).includes('p_doctors') ||
+        userMods.length === 0;
+
+      setModules({
+        ecommerce: hasEcom,
+        clinic: hasClinic,
       });
-      setSelectedPermissions(initialPerms);
     } catch (e) {
-      // Fallback to sample data
-      const data = SAMPLE_ADMINS_MAP[adminId] || {
+      // Fallback
+      setAdmin({
         uid: adminId,
         fullName: 'Admin Account',
         email: 'admin@petcare.in',
         phone: '+91 98765 43210',
         role: 'admin',
         status: 'active',
-        permissions: ['p_products', 'p_orders', 'p_doctors', 'p_appointments'],
-      };
-      setAdmin(data);
+        shopId: 'SHOP-DEFAULT',
+        modules: ['ecommerce', 'clinic'],
+      });
       setFormData({
-        fullName: data.fullName,
-        phone: data.phone || '',
-        status: data.status || 'active',
+        fullName: 'Admin Account',
+        phone: '+91 98765 43210',
+        status: 'active',
+        shopId: 'SHOP-DEFAULT',
+        businessId: '',
       });
     } finally {
       setIsLoading(false);
@@ -127,8 +129,11 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
     fetchAdminDetail();
   }, [adminId]);
 
-  const togglePermission = (id: string) => {
-    setSelectedPermissions((prev) => ({ ...prev, [id]: !prev[id] }));
+  const handleCopyShopId = () => {
+    if (!formData.shopId) return;
+    navigator.clipboard.writeText(formData.shopId);
+    setCopiedShopId(true);
+    setTimeout(() => setCopiedShopId(false), 2000);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -137,21 +142,51 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
     setSuccessMessage('');
     setErrorMessage('');
 
+    // Exactly Two Module Validation: at least one module required
+    const selectedModulesList: ('ecommerce' | 'clinic')[] = [];
+    if (modules.ecommerce) selectedModulesList.push('ecommerce');
+    if (modules.clinic) selectedModulesList.push('clinic');
+
+    if (selectedModulesList.length === 0) {
+      setErrorMessage('Please select at least one module (E-commerce or Clinic / Doctor) for this Admin.');
+      setIsSaving(false);
+      return;
+    }
+
     try {
-      const enabledPermissions = Object.keys(selectedPermissions).filter((k) => selectedPermissions[k]);
+      const res = await fetch('/api/super-admin/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: adminId,
+          fullName: formData.fullName.trim(),
+          phone: formData.phone.trim(),
+          status: formData.status,
+          modules: selectedModulesList,
+          createdByUid: currentSuperAdmin?.uid || 'super_admin',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setErrorMessage(data.error || 'Failed to update Admin account.');
+        setIsSaving(false);
+        return;
+      }
 
       await logActivity({
-        actorUid: 'super-admin',
+        actorUid: currentSuperAdmin?.uid || 'super_admin',
         actorName: 'Super Admin',
         actorRole: 'super_admin',
         action: 'UPDATED_ADMIN_PERMISSIONS',
         targetUid: adminId,
         targetName: formData.fullName,
         targetRole: 'admin',
-        details: `Updated details & ${enabledPermissions.length} permissions for admin ${formData.fullName}`,
+        details: `Updated profile & module permissions (${selectedModulesList.join(', ')}) for Admin ${formData.fullName}`,
       });
 
-      setSuccessMessage('Admin profile and individual module permissions updated successfully!');
+      setSuccessMessage('Admin profile and module permissions updated successfully!');
+      await fetchAdminDetail();
     } catch (err: any) {
       setErrorMessage(err.message || 'Error updating profile.');
     } finally {
@@ -162,8 +197,8 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
 
   if (isLoading) {
     return (
-      <div className="bg-white border border-[#E8ECF0] rounded-2xl p-12 text-center text-xs text-[#777980] font-medium">
-        Loading Admin Details...
+      <div className="bg-white border border-[#E8ECF0] rounded-2xl p-16 text-center text-xs text-[#777980] font-semibold flex items-center justify-center gap-2">
+        <Loader2 className="w-4 h-4 animate-spin text-[#7567E8]" /> Loading Admin Details...
       </div>
     );
   }
@@ -195,17 +230,48 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
 
       {/* Main Card */}
       <div className="bg-white border border-[#E8ECF0] rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
-        <div className="flex items-center gap-4 pb-6 border-b border-[#E8ECF0]">
-          <div className="w-16 h-16 rounded-2xl bg-[#F1EEFF] text-[#7567E8] font-bold text-xl flex items-center justify-center border border-[#7567E8]/20 shadow-xs">
-            {admin.fullName.slice(0, 2).toUpperCase()}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E8ECF0]">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-[#F1EEFF] text-[#7567E8] font-bold text-xl flex items-center justify-center border border-[#7567E8]/20 shadow-xs">
+              {admin.fullName.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <h1 className="text-xl font-extrabold text-[#25242A] flex items-center gap-2">
+                {admin.fullName} <ShieldCheck className="w-5 h-5 text-[#7567E8]" />
+              </h1>
+              <p className="text-xs text-[#777980] font-medium">{admin.email}</p>
+              <p className="text-[11px] text-[#777980]/80 font-mono mt-0.5">UID: {admin.uid}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-extrabold text-[#25242A] flex items-center gap-2">
-              {admin.fullName} <ShieldCheck className="w-5 h-5 text-[#7567E8]" />
-            </h1>
-            <p className="text-xs text-[#777980] font-medium">{admin.email}</p>
-            <p className="text-[11px] text-[#777980]/80 font-mono mt-1">UID: {admin.uid}</p>
-          </div>
+
+          {/* Associated Shop ID badge */}
+          {formData.shopId && (
+            <div className="p-3 bg-gradient-to-br from-[#F8FAFC] to-[#F1EEFF]/50 border border-[#7567E8]/20 rounded-2xl flex items-center justify-between gap-3">
+              <div>
+                <span className="text-[9px] font-extrabold uppercase tracking-widest text-[#7567E8] block">
+                  Assigned Shop ID
+                </span>
+                <span className="font-mono font-black text-sm text-[#25242A] tracking-wider">
+                  {formData.shopId}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyShopId}
+                className="px-2 py-1 rounded-lg text-[10px] font-bold border border-[#CBD5E1] bg-white hover:bg-[#F1EEFF] text-[#25242A] flex items-center gap-1"
+              >
+                {copiedShopId ? (
+                  <>
+                    <Check className="w-3 h-3 text-[#10B981]" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" /> Copy
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         {errorMessage && (
@@ -293,46 +359,87 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
             </div>
           </div>
 
-          {/* Individual Module Permissions */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E8ECF0] pb-2">
+          {/* Section 2: EXACTLY TWO MODULE OPTIONS */}
+          <div className="space-y-4 pt-2">
+            <div className="border-b border-[#E8ECF0] pb-2">
               <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#7567E8] flex items-center gap-1.5">
-                <KeyRound className="w-4 h-4 text-[#7567E8]" /> Individual Module Access Permissions
+                <ShieldCheck className="w-4 h-4" /> Assigned Modules (Choose One or Both)
               </h2>
-              <span className="text-[11px] font-bold text-[#7567E8]">
-                {Object.values(selectedPermissions).filter(Boolean).length} / {MODULE_OPTIONS.length} Active
-              </span>
+              <p className="text-[11px] text-[#777980] font-medium mt-1">
+                Toggle module permissions for this Admin. Revoking a module immediately closes access to its respective features.
+              </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {MODULE_OPTIONS.map((m) => {
-                const isChecked = !!selectedPermissions[m.id];
-                return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Module 1: E-commerce */}
+              <div
+                onClick={() => setModules((prev) => ({ ...prev, ecommerce: !prev.ecommerce }))}
+                className={`p-4 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all ${
+                  modules.ecommerce
+                    ? 'bg-[#F1EEFF]/70 border-[#7567E8] shadow-xs'
+                    : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                }`}
+              >
+                <div className="flex items-start gap-3">
                   <div
-                    key={m.id}
-                    onClick={() => togglePermission(m.id)}
-                    className={`p-3 rounded-xl border flex items-center gap-3 cursor-pointer transition-all ${
-                      isChecked
-                        ? 'bg-[#F1EEFF]/50 border-[#7567E8]/40'
-                        : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                    className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                      modules.ecommerce ? 'bg-[#7567E8] text-white' : 'bg-white border border-[#CBD5E1]'
                     }`}
                   >
-                    <div
-                      className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
-                        isChecked ? 'bg-[#7567E8] text-white' : 'bg-white border border-[#CBD5E1]'
-                      }`}
-                    >
-                      {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-[#25242A] text-xs">{m.name}</p>
-                    </div>
-                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-[#7567E8] bg-white px-2 py-0.5 rounded-full border border-[#E8ECF0]">
-                      {m.category}
-                    </span>
+                    {modules.ecommerce && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                   </div>
-                );
-              })}
+                  <div>
+                    <h3 className="font-extrabold text-[#25242A] text-sm flex items-center gap-1.5">
+                      <ShoppingBag className="w-4 h-4 text-[#7567E8]" /> E-commerce Module
+                    </h3>
+                    <p className="text-[11px] text-[#777980] mt-1 leading-relaxed">
+                      Grants access to Products, Multiple images, Categories, Pricing & discounts, Inventory, Orders, and Offers.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-[#7567E8]/10 flex items-center justify-between text-[10px] font-bold">
+                  <span className="text-[#7567E8] uppercase tracking-wider">Top-Level Module</span>
+                  <span className={modules.ecommerce ? 'text-[#7567E8]' : 'text-slate-400'}>
+                    {modules.ecommerce ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Module 2: Clinic / Doctor */}
+              <div
+                onClick={() => setModules((prev) => ({ ...prev, clinic: !prev.clinic }))}
+                className={`p-4 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all ${
+                  modules.clinic
+                    ? 'bg-[#EAF8FE]/70 border-[#0284C7] shadow-xs'
+                    : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                      modules.clinic ? 'bg-[#0284C7] text-white' : 'bg-white border border-[#CBD5E1]'
+                    }`}
+                  >
+                    {modules.clinic && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-[#25242A] text-sm flex items-center gap-1.5">
+                      <Stethoscope className="w-4 h-4 text-[#0284C7]" /> Clinic / Doctor Module
+                    </h3>
+                    <p className="text-[11px] text-[#777980] mt-1 leading-relaxed">
+                      Grants access to Doctor management, Appointments, Pets/patients operations, Medical records, and Services.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-[#0284C7]/10 flex items-center justify-between text-[10px] font-bold">
+                  <span className="text-[#0284C7] uppercase tracking-wider">Top-Level Module</span>
+                  <span className={modules.clinic ? 'text-[#0284C7]' : 'text-slate-400'}>
+                    {modules.clinic ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -340,10 +447,10 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
             <button
               type="submit"
               disabled={isSaving}
-              className="px-6 py-2.5 bg-[#7567E8] hover:bg-[#6354D6] text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 disabled:opacity-50"
+              className="px-6 py-2.5 bg-[#7567E8] hover:bg-[#6354D6] text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              {isSaving ? 'Saving Changes...' : 'Save Profile & Permissions'}
+              {isSaving ? 'Saving Changes...' : 'Save Profile & Module Permissions'}
             </button>
           </div>
         </form>

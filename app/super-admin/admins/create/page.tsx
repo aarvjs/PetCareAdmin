@@ -1,31 +1,54 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { ShieldCheck, ArrowLeft, User, Mail, Phone, Lock, Eye, EyeOff, CheckCircle2, AlertCircle, Info, KeyRound, Check, Send } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import {
+  ShieldCheck,
+  ArrowLeft,
+  User,
+  Mail,
+  Phone,
+  Lock,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  AlertCircle,
+  Building2,
+  ShoppingBag,
+  Stethoscope,
+  Check,
+  Send,
+  Loader2,
+  Copy,
+  Plus,
+} from 'lucide-react';
 import { validateEmail, validateIndianMobile } from '@/lib/validation';
 import { useAuth } from '@/lib/authContext';
 
-const PERMISSION_OPTIONS = [
-  { id: 'p_products', name: 'Products Management', category: 'SHOP' },
-  { id: 'p_categories', name: 'Categories Catalog', category: 'SHOP' },
-  { id: 'p_orders', name: 'Orders Fulfillment', category: 'SHOP' },
-  { id: 'p_inventory', name: 'Stock & Inventory', category: 'SHOP' },
-  { id: 'p_offers', name: 'Discounts & Offers', category: 'SHOP' },
-  { id: 'p_doctors', name: 'Doctor Roster Management', category: 'CLINIC' },
-  { id: 'p_services', name: 'Clinic Services Control', category: 'CLINIC' },
-  { id: 'p_appointments', name: 'Appointments Schedule', category: 'CLINIC' },
-  { id: 'p_vaccinations', name: 'Vaccination Schedules', category: 'CLINIC' },
-  { id: 'p_pets', name: 'Pet Patient Records', category: 'CLINIC' },
-  { id: 'p_banners', name: 'App Banners & Sliders', category: 'CONTENT' },
-  { id: 'p_reports', name: 'Sales & Financial Reports', category: 'DATA' },
-];
+interface BusinessOption {
+  id: string;
+  name: string;
+  shopId: string;
+  businessType: string;
+  city?: string;
+  status: string;
+}
 
-export default function CreateAdminPage() {
+function CreateAdminContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialBusinessId = searchParams.get('businessId') || '';
+  const initialShopId = searchParams.get('shopId') || '';
+
   const { user: currentSuperAdmin } = useAuth();
 
+  // Businesses list state
+  const [businesses, setBusinesses] = useState<BusinessOption[]>([]);
+  const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(true);
+  const [selectedBusinessId, setSelectedBusinessId] = useState(initialBusinessId);
+
+  // Form Data
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
@@ -35,18 +58,13 @@ export default function CreateAdminPage() {
     status: 'active',
   });
 
-  const [selectedPermissions, setSelectedPermissions] = useState<Record<string, boolean>>({
-    p_products: true,
-    p_categories: true,
-    p_orders: true,
-    p_inventory: true,
-    p_doctors: true,
-    p_services: true,
-    p_appointments: true,
-    p_vaccinations: true,
-    p_pets: true,
-    p_banners: true,
-    p_reports: true,
+  // Exactly Two Module Options: E-commerce and Clinic / Doctor
+  const [modules, setModules] = useState<{
+    ecommerce: boolean;
+    clinic: boolean;
+  }>({
+    ecommerce: true,
+    clinic: true,
   });
 
   const [showPassword, setShowPassword] = useState(false);
@@ -54,18 +72,41 @@ export default function CreateAdminPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [warningMessage, setWarningMessage] = useState('');
+  const [copiedShopId, setCopiedShopId] = useState(false);
   const [createdAdminData, setCreatedAdminData] = useState<{ email: string; fullName: string } | null>(null);
 
-  const togglePermission = (id: string) => {
-    setSelectedPermissions((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  // Fetch registered businesses for dropdown
+  useEffect(() => {
+    async function loadBusinesses() {
+      setIsLoadingBusinesses(true);
+      try {
+        const res = await fetch('/api/super-admin/businesses');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.businesses)) {
+          setBusinesses(data.businesses);
 
-  const handleSelectAll = (enable: boolean) => {
-    const updated: Record<string, boolean> = {};
-    PERMISSION_OPTIONS.forEach((p) => {
-      updated[p.id] = enable;
-    });
-    setSelectedPermissions(updated);
+          // If no initial business was selected and list isn't empty, auto-select first active business
+          if (!initialBusinessId && data.businesses.length > 0) {
+            setSelectedBusinessId(data.businesses[0].id);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load businesses list:', e);
+      } finally {
+        setIsLoadingBusinesses(false);
+      }
+    }
+    loadBusinesses();
+  }, [initialBusinessId]);
+
+  const selectedBusiness = businesses.find((b) => b.id === selectedBusinessId) || null;
+  const currentShopId = selectedBusiness?.shopId || initialShopId;
+
+  const handleCopyShopId = () => {
+    if (!currentShopId) return;
+    navigator.clipboard.writeText(currentShopId);
+    setCopiedShopId(true);
+    setTimeout(() => setCopiedShopId(false), 2000);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -73,6 +114,11 @@ export default function CreateAdminPage() {
     setErrorMessage('');
     setSuccessMessage('');
     setWarningMessage('');
+
+    if (!selectedBusinessId) {
+      setErrorMessage('Please select a registered business / clinic to assign this Admin to.');
+      return;
+    }
 
     if (!formData.fullName.trim()) {
       setErrorMessage('Full Name is required.');
@@ -85,12 +131,12 @@ export default function CreateAdminPage() {
     }
 
     if (formData.phone && !validateIndianMobile(formData.phone)) {
-      setErrorMessage('Please enter a valid 10-digit Indian mobile number (e.g. +91 9876543210 or 9876543210).');
+      setErrorMessage('Please enter a valid 10-digit Indian mobile number.');
       return;
     }
 
     if (!formData.password) {
-      setErrorMessage('Password is required.');
+      setErrorMessage('Temporary Password is required.');
       return;
     }
 
@@ -104,7 +150,15 @@ export default function CreateAdminPage() {
       return;
     }
 
-    const enabledPermissions = Object.keys(selectedPermissions).filter((k) => selectedPermissions[k]);
+    // Exactly Two Module Validation: at least one must be selected
+    const selectedModulesList: ('ecommerce' | 'clinic')[] = [];
+    if (modules.ecommerce) selectedModulesList.push('ecommerce');
+    if (modules.clinic) selectedModulesList.push('clinic');
+
+    if (selectedModulesList.length === 0) {
+      setErrorMessage('Please select at least one module (E-commerce or Clinic / Doctor) for this Admin.');
+      return;
+    }
 
     setIsLoading(true);
 
@@ -118,7 +172,9 @@ export default function CreateAdminPage() {
           phone: formData.phone.trim(),
           password: formData.password,
           status: formData.status,
-          permissions: enabledPermissions,
+          businessId: selectedBusinessId,
+          shopId: currentShopId,
+          modules: selectedModulesList,
           createdByUid: currentSuperAdmin?.uid || 'super_admin',
         }),
       });
@@ -134,14 +190,14 @@ export default function CreateAdminPage() {
       setCreatedAdminData({ email: data.user.email, fullName: data.user.fullName });
 
       if (data.emailSent) {
-        setSuccessMessage(`Admin account for ${data.user.fullName} created & invitation email delivered via Resend!`);
+        setSuccessMessage(`Admin account for ${data.user.fullName} created & assigned to ${selectedBusiness?.name || currentShopId}!`);
       } else {
-        setWarningMessage(`Admin account for ${data.user.fullName} created. (Invitation email pending: ${data.emailError || 'Resend error'})`);
+        setWarningMessage(`Admin created for ${selectedBusiness?.name || currentShopId}. (Invitation email pending: ${data.emailError || 'Resend error'})`);
       }
 
       setTimeout(() => {
-        router.push('/super-admin/admins');
-      }, 1500);
+        router.push(selectedBusinessId ? `/super-admin/businesses/${selectedBusinessId}` : '/super-admin/admins');
+      }, 1600);
     } catch (err: any) {
       setErrorMessage(err.message || 'Error connecting to server.');
     } finally {
@@ -181,10 +237,10 @@ export default function CreateAdminPage() {
       {/* Top Header */}
       <div className="flex items-center justify-between">
         <Link
-          href="/super-admin/admins"
+          href={selectedBusinessId ? `/super-admin/businesses/${selectedBusinessId}` : '/super-admin/admins'}
           className="inline-flex items-center gap-1.5 text-xs font-bold text-[#777980] hover:text-[#25242A]"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to Admins List
+          <ArrowLeft className="w-4 h-4" /> Back to Business / Admins
         </Link>
         <span className="text-xs font-bold text-[#7567E8] bg-[#F1EEFF] px-2.5 py-1 rounded-full border border-[#7567E8]/20">
           Super Admin Privilege
@@ -194,16 +250,11 @@ export default function CreateAdminPage() {
       <div className="bg-white border border-[#E8ECF0] rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
         <div>
           <h1 className="text-xl font-extrabold text-[#25242A] flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-[#7567E8]" /> Create Admin Account & Credentials
+            <ShieldCheck className="w-6 h-6 text-[#7567E8]" /> Assign Admin to Business & Shop ID
           </h1>
           <p className="text-xs text-[#777980] font-medium mt-1">
-            Super Admin creates login credentials and sets individual module access permissions for the new Admin.
+            Associate an Administrator account with a registered clinic business, bind their unique Shop ID, and assign their top-level module permissions.
           </p>
-        </div>
-
-        <div className="p-3.5 bg-[#EAF8FE] border border-[#8ED8F8]/40 rounded-xl text-xs text-[#0284C7] font-semibold flex items-center gap-2">
-          <Info className="w-4 h-4 shrink-0" />
-          <span>Server-Side Account Provisioning & Resend Email Invitation active.</span>
         </div>
 
         {errorMessage && (
@@ -236,10 +287,98 @@ export default function CreateAdminPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6 text-xs">
-          {/* Section 1: Admin Credentials */}
-          <div className="space-y-4">
+          {/* Section 1: Business Selection & Shop ID Display */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between border-b border-[#E8ECF0] pb-2">
+              <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#7567E8] flex items-center gap-1.5">
+                <Building2 className="w-4 h-4" /> 1. Select Registered Clinic Business
+              </h2>
+              <Link
+                href="/super-admin/businesses"
+                className="text-[11px] font-bold text-[#7567E8] hover:underline flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> Register New Business
+              </Link>
+            </div>
+
+            {isLoadingBusinesses ? (
+              <div className="p-3 bg-slate-50 border border-[#E8ECF0] rounded-xl text-center text-[#777980] flex items-center justify-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#7567E8]" /> Loading registered businesses...
+              </div>
+            ) : businesses.length === 0 ? (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 space-y-2">
+                <p className="font-bold">No registered businesses found in the database.</p>
+                <p className="text-[11px]">You must register a business before assigning Admin accounts.</p>
+                <Link
+                  href="/super-admin/businesses"
+                  className="inline-block px-3 py-1.5 bg-amber-600 text-white rounded-lg font-bold text-xs hover:bg-amber-700"
+                >
+                  Go to Business Registration
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block font-bold text-[#25242A] uppercase tracking-wider mb-1.5">
+                    Target Business / Clinic *
+                  </label>
+                  <select
+                    value={selectedBusinessId}
+                    onChange={(e) => setSelectedBusinessId(e.target.value)}
+                    required
+                    className="w-full bg-[#FAFCFD] border border-[#E8ECF0] focus:border-[#7567E8] px-4 py-2.5 rounded-xl font-bold text-[#25242A] outline-hidden cursor-pointer"
+                  >
+                    <option value="" disabled>
+                      -- Select a Registered Business --
+                    </option>
+                    {businesses.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.shopId}) - {b.city || b.businessType}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Prominently Displayed Selected Shop ID Card */}
+                {selectedBusiness && (
+                  <div className="p-3.5 bg-gradient-to-r from-[#F1EEFF] to-[#EAF8FE] border border-[#7567E8]/30 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[9px] font-extrabold uppercase tracking-widest text-[#7567E8] block">
+                        Associated Permanent Shop ID
+                      </span>
+                      <span className="font-mono font-black text-sm text-[#25242A] tracking-wider">
+                        {selectedBusiness.shopId}
+                      </span>
+                      <span className="text-[10px] text-[#777980] block mt-0.5">
+                        Clinic: {selectedBusiness.name}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCopyShopId}
+                      className="px-2.5 py-1 bg-white border border-[#7567E8]/30 rounded-lg text-[10px] font-bold text-[#7567E8] hover:bg-[#7567E8] hover:text-white transition-all flex items-center gap-1"
+                    >
+                      {copiedShopId ? (
+                        <>
+                          <Check className="w-3 h-3 text-[#10B981]" /> Copied!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" /> Copy ID
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Admin Credentials */}
+          <div className="space-y-4 pt-2">
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#7567E8] border-b border-[#E8ECF0] pb-2">
-              1. Admin Credentials & Profile
+              2. Administrator Account & Credentials
             </h2>
 
             <div>
@@ -271,7 +410,7 @@ export default function CreateAdminPage() {
                     required
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="admin.vikram@petcare.in"
+                    placeholder="admin.indiranagar@petcare.in"
                     className="w-full bg-[#FAFCFD] border border-[#E8ECF0] focus:border-[#7567E8] pl-10 pr-4 py-2.5 rounded-xl font-semibold text-[#25242A] outline-hidden"
                   />
                 </div>
@@ -336,101 +475,129 @@ export default function CreateAdminPage() {
                 </div>
               </div>
             </div>
-
-            <div>
-              <label className="block font-bold text-[#25242A] uppercase tracking-wider mb-1.5">
-                Initial Account Status
-              </label>
-              <select
-                value={formData.status}
-                onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                className="w-full bg-[#FAFCFD] border border-[#E8ECF0] focus:border-[#7567E8] px-4 py-2.5 rounded-xl font-semibold text-[#25242A] outline-hidden"
-              >
-                <option value="active">Active (Immediate Portal Access)</option>
-                <option value="inactive">Inactive (Disabled until activated)</option>
-              </select>
-            </div>
           </div>
 
-          {/* Section 2: Individual Module Access Permissions */}
+          {/* Section 3: EXACTLY TWO MODULE OPTIONS */}
           <div className="space-y-4 pt-2">
-            <div className="flex items-center justify-between border-b border-[#E8ECF0] pb-2">
+            <div className="border-b border-[#E8ECF0] pb-2">
               <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#7567E8] flex items-center gap-1.5">
-                <KeyRound className="w-4 h-4" /> 2. Individual Module Access Permissions
+                <ShieldCheck className="w-4 h-4" /> 3. Assign Admin Modules (Choose One or Both)
               </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleSelectAll(true)}
-                  className="text-[11px] font-bold text-[#7567E8] hover:underline"
-                >
-                  Select All
-                </button>
-                <span className="text-[#777980]">•</span>
-                <button
-                  type="button"
-                  onClick={() => handleSelectAll(false)}
-                  className="text-[11px] font-bold text-[#777980] hover:underline"
-                >
-                  Clear All
-                </button>
-              </div>
+              <p className="text-[11px] text-[#777980] font-medium mt-1">
+                Super Admin assigns module access. Each module enables full supervision of its internal features.
+              </p>
             </div>
 
-            <p className="text-[11px] text-[#777980] font-medium">
-              Check the modules this Admin is authorized to access in the Admin Portal:
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {PERMISSION_OPTIONS.map((p) => {
-                const isChecked = !!selectedPermissions[p.id];
-
-                return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Module 1: E-commerce */}
+              <div
+                onClick={() => setModules((prev) => ({ ...prev, ecommerce: !prev.ecommerce }))}
+                className={`p-4 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all ${
+                  modules.ecommerce
+                    ? 'bg-[#F1EEFF]/70 border-[#7567E8] shadow-xs'
+                    : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                }`}
+              >
+                <div className="flex items-start gap-3">
                   <div
-                    key={p.id}
-                    onClick={() => togglePermission(p.id)}
-                    className={`p-3 rounded-xl border flex items-center gap-3 cursor-pointer transition-all ${
-                      isChecked
-                        ? 'bg-[#F1EEFF]/50 border-[#7567E8]/40'
-                        : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                    className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                      modules.ecommerce ? 'bg-[#7567E8] text-white' : 'bg-white border border-[#CBD5E1]'
                     }`}
                   >
-                    <div
-                      className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
-                        isChecked ? 'bg-[#7567E8] text-white' : 'bg-white border border-[#CBD5E1]'
-                      }`}
-                    >
-                      {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-[#25242A] text-xs">{p.name}</p>
-                    </div>
-                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-[#7567E8] bg-white px-2 py-0.5 rounded-full border border-[#E8ECF0]">
-                      {p.category}
-                    </span>
+                    {modules.ecommerce && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                   </div>
-                );
-              })}
+                  <div>
+                    <h3 className="font-extrabold text-[#25242A] text-sm flex items-center gap-1.5">
+                      <ShoppingBag className="w-4 h-4 text-[#7567E8]" /> E-commerce
+                    </h3>
+                    <p className="text-[11px] text-[#777980] mt-1 leading-relaxed">
+                      Grants access to Products, Multiple images, Categories, Pricing & discounts, Inventory, Orders, and Offers.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-[#7567E8]/10 flex items-center justify-between text-[10px] font-bold">
+                  <span className="text-[#7567E8] uppercase tracking-wider">Top-Level Module</span>
+                  <span className={modules.ecommerce ? 'text-[#7567E8]' : 'text-slate-400'}>
+                    {modules.ecommerce ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Module 2: Clinic / Doctor */}
+              <div
+                onClick={() => setModules((prev) => ({ ...prev, clinic: !prev.clinic }))}
+                className={`p-4 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all ${
+                  modules.clinic
+                    ? 'bg-[#EAF8FE]/70 border-[#0284C7] shadow-xs'
+                    : 'bg-[#FAFCFD] border-[#E8ECF0] opacity-75 hover:opacity-100'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                      modules.clinic ? 'bg-[#0284C7] text-white' : 'bg-white border border-[#CBD5E1]'
+                    }`}
+                  >
+                    {modules.clinic && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-[#25242A] text-sm flex items-center gap-1.5">
+                      <Stethoscope className="w-4 h-4 text-[#0284C7]" /> Clinic / Doctor
+                    </h3>
+                    <p className="text-[11px] text-[#777980] mt-1 leading-relaxed">
+                      Grants access to Doctor management, Appointments, Pets/patients operations, Medical records, and Services.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-[#0284C7]/10 flex items-center justify-between text-[10px] font-bold">
+                  <span className="text-[#0284C7] uppercase tracking-wider">Top-Level Module</span>
+                  <span className={modules.clinic ? 'text-[#0284C7]' : 'text-slate-400'}>
+                    {modules.clinic ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="pt-4 border-t border-[#E8ECF0] flex items-center justify-end gap-3">
             <Link
-              href="/super-admin/admins"
+              href={selectedBusinessId ? `/super-admin/businesses/${selectedBusinessId}` : '/super-admin/admins'}
               className="px-4 py-2.5 border border-[#E8ECF0] rounded-xl font-bold text-[#777980] hover:bg-[#FAFCFD]"
             >
               Cancel
             </Link>
             <button
               type="submit"
-              disabled={isLoading}
-              className="px-6 py-2.5 bg-[#7567E8] hover:bg-[#6354D6] text-white font-bold rounded-xl shadow-xs transition-all disabled:opacity-50 flex items-center gap-2"
+              disabled={isLoading || businesses.length === 0}
+              className="px-6 py-2.5 bg-[#7567E8] hover:bg-[#6354D6] text-white font-bold rounded-xl shadow-xs transition-all disabled:opacity-50 flex items-center gap-2 cursor-pointer"
             >
-              {isLoading ? 'Creating Admin...' : 'Create Admin & Send Invitation'}
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Provisioning & Delivering Invitation...
+                </>
+              ) : (
+                'Create Admin & Assign to Shop'
+              )}
             </button>
           </div>
         </form>
       </div>
     </div>
+  );
+}
+
+export default function CreateAdminPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-12 text-center text-xs text-[#777980] font-semibold flex items-center justify-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin text-[#7567E8]" /> Loading Admin Provisioning Portal...
+        </div>
+      }
+    >
+      <CreateAdminContent />
+    </Suspense>
   );
 }
