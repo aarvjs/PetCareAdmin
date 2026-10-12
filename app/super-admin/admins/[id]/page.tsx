@@ -138,15 +138,17 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
     setSuccessMessage('');
     setErrorMessage('');
 
-    // Exactly Two Module Validation: at least one module required
+    // Module selection: E-commerce, Clinic / Doctor, Both, or None
     const selectedModulesList: ('ecommerce' | 'clinic')[] = [];
     if (modules.ecommerce) selectedModulesList.push('ecommerce');
     if (modules.clinic) selectedModulesList.push('clinic');
 
-    if (selectedModulesList.length === 0) {
-      setErrorMessage('Please select at least one module (E-commerce or Clinic / Doctor) for this Admin.');
-      setIsSaving(false);
-      return;
+    const computedPermissions: string[] = [];
+    if (selectedModulesList.includes('ecommerce')) {
+      computedPermissions.push('products', 'categories', 'orders', 'customers', 'inventory', 'offers');
+    }
+    if (selectedModulesList.includes('clinic')) {
+      computedPermissions.push('doctors', 'services', 'vaccinations', 'appointments', 'pets');
     }
 
     try {
@@ -159,6 +161,7 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
           phone: formData.phone.trim(),
           status: formData.status,
           modules: selectedModulesList,
+          permissions: computedPermissions,
           createdByUid: currentSuperAdmin?.uid || 'super_admin',
         }),
       });

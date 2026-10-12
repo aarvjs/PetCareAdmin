@@ -4,7 +4,7 @@ import {
   isRequestAuthorizedAsSuperAdmin,
   adminDb,
   hasServiceAccount,
-  getSharedClientFirestore,
+  getServerAuthenticatedDb,
 } from '@/lib/firebaseAdmin';
 import { sendAdminInvitationEmail } from '@/lib/emailService';
 import { doc, updateDoc, arrayUnion, increment } from 'firebase/firestore';
@@ -80,18 +80,12 @@ export async function POST(request: Request) {
       ? modules.filter((m: string) => allowedModules.includes(m))
       : [];
 
-    if (validModules.length === 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'Please select at least one module (E-commerce or Clinic / Doctor) for this Admin.',
-          },
-          requestId,
-        },
-        { status: 400 }
-      );
+    const computedPermissions: string[] = [];
+    if (validModules.includes('ecommerce')) {
+      computedPermissions.push('products', 'categories', 'orders', 'customers', 'inventory', 'offers');
+    }
+    if (validModules.includes('clinic')) {
+      computedPermissions.push('doctors', 'services', 'vaccinations', 'appointments', 'pets');
     }
 
     // 4. Create Admin Account Server-Side via Firebase Admin SDK
@@ -105,7 +99,7 @@ export async function POST(request: Request) {
       businessId: businessId || '',
       shopId: shopId || '',
       modules: validModules,
-      permissions: permissions,
+      permissions: permissions.length > 0 ? permissions : computedPermissions,
       createdBy: createdByUid,
     });
 
@@ -134,7 +128,7 @@ export async function POST(request: Request) {
             { merge: true }
           );
         } else {
-          const clientDb = getSharedClientFirestore();
+          const clientDb = await getServerAuthenticatedDb();
           await updateDoc(doc(clientDb, 'businesses', businessId), {
             assignedAdmins: arrayUnion(adminEntry),
             adminCount: increment(1),
@@ -146,8 +140,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // 6. Send Invitation Email via Resend
-    let emailResult: { success: boolean; error?: string | null } = { success: false, error: 'Email dispatch omitted' };
+    // 6. Send Invitation Email (Firebase Auth Secure Link + Resend Template)
+    let emailResult: any = { success: false, error: 'Email dispatch omitted' };
 
     try {
       emailResult = await sendAdminInvitationEmail({
@@ -157,15 +151,15 @@ export async function POST(request: Request) {
         createdByName: 'Super Administrator',
       });
     } catch (e: any) {
-      console.warn(`[Create Admin][${requestId}] Resend invitation warning:`, e);
-      emailResult = { success: false, error: e?.message || 'Resend API call failed' };
+      console.warn(`[Create Admin][${requestId}] Invitation warning:`, e);
+      emailResult = { success: false, error: e?.message || 'Email delivery call failed' };
     }
 
     return NextResponse.json({
       success: true,
       message: emailResult.success
-        ? `Admin account for ${userResult.fullName} created and invitation email delivered!`
-        : `Admin account created for ${userResult.fullName}. (Invitation email delivery pending/failed: ${emailResult.error})`,
+        ? (emailResult.message || `Admin account for ${userResult.fullName} created and invitation email delivered!`)
+        : `Admin account created for ${userResult.fullName}. (Invitation email notice: ${emailResult.error})`,
       user: {
         uid: userResult.uid,
         email: userResult.email,
@@ -177,7 +171,9 @@ export async function POST(request: Request) {
         modules: validModules,
       },
       emailSent: emailResult.success,
+      emailProvider: emailResult.provider || null,
       emailError: emailResult.success ? null : emailResult.error,
+      emailDetails: emailResult.details || null,
       requestId,
     });
   } catch (error: any) {

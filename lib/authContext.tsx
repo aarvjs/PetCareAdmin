@@ -21,6 +21,7 @@ export interface UserProfile {
   permissions?: string[];
   shopId?: string;
   businessId?: string;
+  assignedBusinessName?: string;
   modules?: ('ecommerce' | 'clinic')[];
   createdBy?: string;
   createdAt?: any;
@@ -28,9 +29,33 @@ export interface UserProfile {
   lastLoginAt?: any;
 }
 
+export interface BusinessDetails {
+  id: string;
+  shopId: string;
+  name: string;
+  businessType?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  logoUrl?: string;
+  logoPublicId?: string;
+  status: 'active' | 'inactive';
+  modules?: ('ecommerce' | 'clinic')[];
+  adminCount?: number;
+  assignedAdmins?: any[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
+  business: BusinessDetails | null;
+  businessLoading: boolean;
+  businessError: string | null;
   isAuthenticated: boolean;
   loading: boolean;
   setSessionUser: (prof: UserProfile) => void;
@@ -42,6 +67,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   profile: null,
+  business: null,
+  businessLoading: false,
+  businessError: null,
   isAuthenticated: false,
   loading: true,
   setSessionUser: () => {},
@@ -53,6 +81,9 @@ const AuthContext = createContext<AuthContextType>({
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [business, setBusiness] = useState<BusinessDetails | null>(null);
+  const [businessLoading, setBusinessLoading] = useState<boolean>(false);
+  const [businessError, setBusinessError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Helper to load stored session from sessionStorage if available
@@ -69,6 +100,114 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null;
   };
 
+  const getStoredBusiness = (): BusinessDetails | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = sessionStorage.getItem('hp_session_business');
+      if (stored) {
+        return JSON.parse(stored) as BusinessDetails;
+      }
+    } catch (e) {
+      console.warn('Could not read stored session business:', e);
+    }
+    return null;
+  };
+
+  const fetchBusiness = async (adminProfile: UserProfile): Promise<BusinessDetails | null> => {
+    if (adminProfile.role !== 'admin' && adminProfile.role !== 'doctor') {
+      setBusiness(null);
+      setBusinessError(null);
+      setBusinessLoading(false);
+      return null;
+    }
+
+    setBusinessLoading(true);
+    setBusinessError(null);
+
+    const bId = adminProfile.businessId;
+    const sId = adminProfile.shopId;
+
+    if (!bId && !sId) {
+      setBusiness(null);
+      setBusinessError('Your administrator account is not assigned to any registered clinic or business.');
+      setBusinessLoading(false);
+      return null;
+    }
+
+    try {
+      let bData: BusinessDetails | null = null;
+
+      // 1. Fetch by canonical businessId from Firestore
+      if (bId) {
+        try {
+          const bSnap = await getDoc(doc(db, 'businesses', bId));
+          if (bSnap.exists()) {
+            bData = { id: bSnap.id, ...bSnap.data() } as BusinessDetails;
+          }
+        } catch (e) {
+          // ignore and try next method
+        }
+      }
+
+      // 2. Fetch by server API route (handles verified server permissions)
+      if (!bData) {
+        try {
+          const res = await fetch(
+            `/api/admin/business?businessId=${encodeURIComponent(bId || '')}&shopId=${encodeURIComponent(sId || '')}&uid=${encodeURIComponent(adminProfile.uid || '')}`
+          );
+          const data = await res.json();
+          if (data.success && data.business) {
+            bData = data.business as BusinessDetails;
+          } else if (data.error) {
+            setBusinessError(data.error);
+          }
+        } catch (apiErr) {
+          // ignore
+        }
+      }
+
+      if (!bData) {
+        // Check stored session business fallback before setting error
+        const stored = getStoredBusiness();
+        if (stored && (stored.id === bId || stored.shopId === sId)) {
+          bData = stored;
+        } else {
+          setBusiness(null);
+          setBusinessError('Assigned clinic business was not found in the database. Please contact your Super Administrator.');
+          setBusinessLoading(false);
+          return null;
+        }
+      }
+
+      if (bData.status === 'inactive') {
+        setBusiness(bData);
+        setBusinessError('Your assigned clinic business is currently inactive. Access to the administration portal is restricted.');
+        setBusinessLoading(false);
+        return bData;
+      }
+
+      setBusiness(bData);
+      setBusinessError(null);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('hp_session_business', JSON.stringify(bData));
+      }
+      setBusinessLoading(false);
+      return bData;
+    } catch (err: any) {
+      console.warn('Error fetching assigned business:', err);
+      const stored = getStoredBusiness();
+      if (stored) {
+        setBusiness(stored);
+        setBusinessError(stored.status === 'inactive' ? 'Assigned clinic business is currently inactive.' : null);
+      } else {
+        setBusiness(null);
+        setBusinessError('Failed to verify assigned business status.');
+      }
+      setBusinessLoading(false);
+      return null;
+    }
+  };
+
   const fetchProfile = async (uid: string) => {
     try {
       const userDocRef = doc(db, 'users', uid);
@@ -79,23 +218,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('hp_session_user', JSON.stringify(data));
         }
+        await fetchBusiness(data);
         return data;
       } else {
         const stored = getStoredSession();
         if (stored) {
           setProfile(stored);
+          await fetchBusiness(stored);
           return stored;
         }
         setProfile(null);
+        setBusiness(null);
         return null;
       }
     } catch (error) {
       const stored = getStoredSession();
       if (stored) {
         setProfile(stored);
+        await fetchBusiness(stored);
         return stored;
       }
       setProfile(null);
+      setBusiness(null);
       return null;
     }
   };
@@ -105,6 +249,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const stored = getStoredSession();
     if (stored) {
       setProfile(stored);
+      const storedBiz = getStoredBusiness();
+      if (storedBiz) {
+        setBusiness(storedBiz);
+      } else {
+        fetchBusiness(stored);
+      }
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -115,8 +265,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const fallbackStored = getStoredSession();
         if (fallbackStored) {
           setProfile(fallbackStored);
+          await fetchBusiness(fallbackStored);
         } else {
           setProfile(null);
+          setBusiness(null);
+          setBusinessError(null);
         }
       }
       setLoading(false);
@@ -130,11 +283,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('hp_session_user', JSON.stringify(prof));
     }
+    fetchBusiness(prof);
   };
 
   const refreshProfile = async () => {
     if (user) {
       await fetchProfile(user.uid);
+    } else if (profile) {
+      await fetchBusiness(profile);
     }
   };
 
@@ -167,8 +323,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setUser(null);
       setProfile(null);
+      setBusiness(null);
+      setBusinessError(null);
       if (typeof window !== 'undefined') {
         sessionStorage.removeItem('hp_session_user');
+        sessionStorage.removeItem('hp_session_business');
       }
     }
   };
@@ -180,6 +339,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         profile,
+        business,
+        businessLoading,
+        businessError,
         isAuthenticated,
         loading,
         setSessionUser,

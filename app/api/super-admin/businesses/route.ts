@@ -29,17 +29,9 @@ async function generateUniqueShopId(): Promise<string> {
     } else {
       try {
         const clientDb = await getServerAuthenticatedDb();
-        // Try businesses collection
         const qBiz = query(collection(clientDb, 'businesses'), where('shopId', '==', candidate));
         const snapBiz = await getDocs(qBiz);
-        if (!snapBiz.empty) {
-          isCollision = true;
-        } else {
-          // Check fallback users collection
-          const qUsers = query(collection(clientDb, 'users'), where('shopId', '==', candidate));
-          const snapUsers = await getDocs(qUsers);
-          isCollision = !snapUsers.empty;
-        }
+        isCollision = !snapBiz.empty;
       } catch (e) {
         isCollision = false;
       }
@@ -67,27 +59,8 @@ export async function GET(request: Request) {
       businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     } else {
       const clientDb = await getServerAuthenticatedDb();
-
-      // 1. Try businesses collection
-      try {
-        const snap = await getDocs(collection(clientDb, 'businesses'));
-        if (!snap.empty) {
-          businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        }
-      } catch (e: any) {
-        // Fallback to users collection
-      }
-
-      // 2. Fallback to users collection where isBusinessDoc == true
-      if (businesses.length === 0) {
-        try {
-          const q = query(collection(clientDb, 'users'), where('isBusinessDoc', '==', true));
-          const snap = await getDocs(q);
-          businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        } catch (e: any) {
-          console.warn('[Businesses GET] users collection fallback warning:', e.message);
-        }
-      }
+      const snap = await getDocs(collection(clientDb, 'businesses'));
+      businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     }
 
     // Filter by search query
@@ -148,6 +121,8 @@ export async function POST(request: Request) {
       state,
       country = 'India',
       logoUrl = '',
+      logoPath = '',
+      storagePath = '',
       logoPublicId = '',
       status = 'active',
       createdByUid = 'super_admin',
@@ -175,7 +150,49 @@ export async function POST(request: Request) {
       );
     }
 
-    // 3. Generate Trusted Server-Side Unique Shop ID
+    // 3. Prevent duplicate documents (Idempotent business registration)
+    if (hasServiceAccount() && adminDb) {
+      const existingSnap = await adminDb
+        .collection('businesses')
+        .where('email', '==', email.trim().toLowerCase())
+        .where('name', '==', name.trim())
+        .limit(1)
+        .get();
+      if (!existingSnap.empty) {
+        const existingDoc = existingSnap.docs[0];
+        const existingBiz: any = { id: existingDoc.id, ...existingDoc.data() };
+        return NextResponse.json({
+          success: true,
+          message: `Business "${name}" is already registered with Shop ID ${existingBiz.shopId}.`,
+          business: existingBiz,
+          requestId,
+        });
+      }
+    } else {
+      const clientDb = await getServerAuthenticatedDb();
+      try {
+        const qExisting = query(
+          collection(clientDb, 'businesses'),
+          where('email', '==', email.trim().toLowerCase()),
+          where('name', '==', name.trim())
+        );
+        const snapExisting = await getDocs(qExisting);
+        if (!snapExisting.empty) {
+          const existingDoc = snapExisting.docs[0];
+          const existingBiz: any = { id: existingDoc.id, ...existingDoc.data() };
+          return NextResponse.json({
+            success: true,
+            message: `Business "${name}" is already registered with Shop ID ${existingBiz.shopId}.`,
+            business: existingBiz,
+            requestId,
+          });
+        }
+      } catch (checkErr) {
+        // Proceed if query check fails
+      }
+    }
+
+    // 4. Generate Trusted Server-Side Unique Shop ID
     const shopId = await generateUniqueShopId();
     const businessId = `biz_${Date.now()}_${Math.random().toString(36).slice(-6)}`;
     const now = new Date().toISOString();
@@ -192,27 +209,35 @@ export async function POST(request: Request) {
       state: state ? state.trim() : '',
       country: country ? country.trim() : 'India',
       logoUrl: logoUrl || '',
+      logoPath: logoPath || storagePath || '',
       logoPublicId: logoPublicId || '',
       status: status === 'inactive' ? 'inactive' : 'active',
       adminCount: 0,
       assignedAdmins: [],
-      isBusinessDoc: true,
       createdBy: createdByUid,
       createdAt: now,
       updatedAt: now,
     };
 
-    // 4. Save to Firestore
-    if (hasServiceAccount() && adminDb) {
-      await adminDb.collection('businesses').doc(businessId).set(businessDoc);
-    } else {
-      const clientDb = await getServerAuthenticatedDb();
-      try {
+    // 5. Save directly to canonical businesses collection
+    try {
+      if (hasServiceAccount() && adminDb) {
+        await adminDb.collection('businesses').doc(businessId).set(businessDoc);
+      } else {
+        const clientDb = await getServerAuthenticatedDb();
         await setDoc(doc(clientDb, 'businesses', businessId), businessDoc);
-      } catch (err: any) {
-        // Fallback to storing in users collection with isBusinessDoc = true
-        await setDoc(doc(clientDb, 'users', businessId), businessDoc);
       }
+    } catch (dbWriteErr: any) {
+      console.warn(`[Register Business Server Write Warning][${requestId}]`, dbWriteErr.message);
+      // If server write was blocked due to strict cloud rules, return provisioned business
+      // so the authenticated client browser can finalize the Firestore write!
+      return NextResponse.json({
+        success: true,
+        needsClientWrite: true,
+        business: businessDoc,
+        message: `Business provisioned with Shop ID ${shopId}. Finalizing registration...`,
+        requestId,
+      });
     }
 
     return NextResponse.json({

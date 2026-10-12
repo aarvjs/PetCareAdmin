@@ -9,7 +9,7 @@ import { CheckCircle2, User, Phone, Mail, ShieldCheck, AlertCircle, Calendar } f
 import { useAuth } from '@/lib/authContext';
 
 export default function AdminProfilePage() {
-  const { user, profile, updateProfileData } = useAuth();
+  const { user, profile, business, updateProfileData } = useAuth();
 
   const [formData, setFormData] = useState({
     fullName: '',
@@ -153,6 +153,79 @@ export default function AdminProfilePage() {
             {isSaving ? 'Saving Profile...' : 'Save Admin Profile'}
           </Button>
         </form>
+      </Card>
+
+      {/* Assigned Business Association */}
+      <Card>
+        <div className="border-b border-[#E8ECF0] pb-4 mb-4">
+          <h3 className="text-base font-bold text-[#25242A]">Assigned Clinic / Business Profile</h3>
+          <p className="text-xs text-[#737780] mt-0.5">
+            Your administrative credentials and operational scope are bound to this registered business.
+          </p>
+        </div>
+
+        {business ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              {(business.logoUrl || (business as any).logo) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={business.logoUrl || (business as any).logo}
+                  alt={business.name}
+                  className="w-12 h-12 rounded-xl object-cover border border-[#E8ECF0]"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-[#F1EEFF] text-[#7567E8] flex items-center justify-center font-black text-lg border border-[#DDD7FD]">
+                  {business.name.slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <div>
+                <h4 className="font-bold text-sm text-[#25242A]">{business.name}</h4>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="font-mono text-xs font-bold text-[#7567E8] bg-[#F1EEFF] px-2 py-0.5 rounded border border-[#DDD7FD]">
+                    Shop ID: {business.shopId}
+                  </span>
+                  <span className="text-xs font-semibold text-[#16A34A] bg-[#DCFCE7] px-2 py-0.5 rounded capitalize">
+                    {business.status || 'Active'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+              <div className="p-3 bg-[#F8FAFC] rounded-xl border border-[#E8ECF0]">
+                <span className="text-[#737780] block text-[11px] mb-0.5">Assigned Modules</span>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {(business.modules || profile?.modules || ['ecommerce', 'clinic']).map((mod: string) => (
+                    <span
+                      key={mod}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#7567E8]/10 text-[#7567E8] capitalize"
+                    >
+                      {mod === 'clinic' ? 'Clinic & Doctors' : mod === 'ecommerce' ? 'E-Commerce Store' : mod}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3 bg-[#F8FAFC] rounded-xl border border-[#E8ECF0]">
+                <span className="text-[#737780] block text-[11px] mb-0.5">Location / City</span>
+                <span className="font-bold text-[#25242A]">
+                  {business.city ? `${business.city}, ${business.state || 'India'}` : 'Not specified'}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-[#737780] p-4 bg-[#F8FAFC] rounded-xl border border-[#E8ECF0]">
+            {profile?.shopId ? (
+              <p>
+                Connected to Shop ID <span className="font-mono font-bold text-[#7567E8]">{profile.shopId}</span>.
+              </p>
+            ) : (
+              <p>No business profile currently associated with this admin account.</p>
+            )}
+          </div>
+        )}
       </Card>
     </div>
   );

@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: `Invitation email resent successfully to ${email}!`,
+      message: emailResult.message || `Invitation email resent successfully to ${email}!`,
       requestId,
     });
   } catch (error: any) {

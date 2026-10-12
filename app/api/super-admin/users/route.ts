@@ -1,5 +1,89 @@
 import { NextResponse } from 'next/server';
-import { createServerUserProfile, isRequestAuthorizedAsSuperAdmin, adminDb } from '@/lib/firebaseAdmin';
+import {
+  createServerUserProfile,
+  isRequestAuthorizedAsSuperAdmin,
+  adminDb,
+  hasServiceAccount,
+  getServerAuthenticatedDb,
+} from '@/lib/firebaseAdmin';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const role = searchParams.get('role');
+    const status = searchParams.get('status');
+    const search = searchParams.get('search')?.toLowerCase().trim();
+    const businessId = searchParams.get('businessId');
+    const shopId = searchParams.get('shopId');
+
+    let users: any[] = [];
+
+    if (hasServiceAccount() && adminDb) {
+      let q: FirebaseFirestore.Query = adminDb.collection('users');
+      if (role && role !== 'all') {
+        q = q.where('role', '==', role);
+      }
+      if (businessId) {
+        q = q.where('businessId', '==', businessId);
+      }
+      if (shopId) {
+        q = q.where('shopId', '==', shopId);
+      }
+      const snap = await q.get();
+      users = snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
+    } else {
+      const clientDb = await getServerAuthenticatedDb();
+      let q = collection(clientDb, 'users') as any;
+      if (role && role !== 'all') {
+        q = query(collection(clientDb, 'users'), where('role', '==', role));
+      }
+      const snap = await getDocs(q);
+      users = snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
+    }
+
+    // Filter out business records or malformed documents if collection contains any legacy items
+    users = users.filter(
+      (u) =>
+        u &&
+        !u.isBusinessDoc &&
+        u.role !== 'business' &&
+        u.role !== 'business_tenant' &&
+        (!role || role === 'all' || u.role === role)
+    );
+
+    // Filter by status if provided
+    if (status && status !== 'all') {
+      users = users.filter((u) => (u.status || 'active') === status);
+    }
+
+    // Filter by search query if provided
+    if (search) {
+      users = users.filter(
+        (u) =>
+          (u.fullName || '').toLowerCase().includes(search) ||
+          (u.email || '').toLowerCase().includes(search) ||
+          (u.phone || '').includes(search) ||
+          (u.shopId || '').toLowerCase().includes(search)
+      );
+    }
+
+    // Sort newest or by name
+    users.sort((a, b) => {
+      const tA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+      const tB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+      return tB - tA;
+    });
+
+    return NextResponse.json({ success: true, users });
+  } catch (error: any) {
+    console.error('[Users GET Error]', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to fetch users.' },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -156,9 +240,7 @@ export async function PUT(req: Request) {
     if (modules !== undefined && Array.isArray(modules)) {
       const allowed = ['ecommerce', 'clinic'];
       const filtered = modules.filter((m: string) => allowed.includes(m));
-      if (filtered.length > 0) {
-        updateData.modules = filtered;
-      }
+      updateData.modules = filtered;
     }
     if (businessId !== undefined) updateData.businessId = businessId;
     if (shopId !== undefined) updateData.shopId = shopId;
@@ -173,9 +255,9 @@ export async function PUT(req: Request) {
     if (adminDb) {
       await adminDb.collection('users').doc(uid).update(updateData);
     } else {
-      const { getSharedClientFirestore } = await import('@/lib/firebaseAdmin');
+      const { getServerAuthenticatedDb } = await import('@/lib/firebaseAdmin');
       const { doc, updateDoc } = await import('firebase/firestore');
-      const clientDb = getSharedClientFirestore();
+      const clientDb = await getServerAuthenticatedDb();
       await updateDoc(doc(clientDb, 'users', uid), updateData);
     }
 

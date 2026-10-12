@@ -20,11 +20,12 @@ export async function GET(
 
     let business: any = null;
     let admins: any[] = [];
+    let doctors: any[] = [];
 
     if (hasServiceAccount() && adminDb) {
       const docSnap = await adminDb.collection('businesses').doc(id).get();
       if (docSnap.exists) {
-        business = { id: docSnap.id, ...docSnap.data() };
+        business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
       }
 
       if (business) {
@@ -35,7 +36,21 @@ export async function GET(
           .get();
 
         admins = adminsSnap.docs
-          .map((d) => ({ uid: d.id, ...d.data() }))
+          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
+          .filter(
+            (u: any) =>
+              u.businessId === id ||
+              (business.shopId && u.shopId === business.shopId)
+          );
+
+        // Query doctors by businessId or shopId
+        const doctorsSnap = await adminDb
+          .collection('users')
+          .where('role', '==', 'doctor')
+          .get();
+
+        doctors = doctorsSnap.docs
+          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
           .filter(
             (u: any) =>
               u.businessId === id ||
@@ -44,45 +59,67 @@ export async function GET(
       }
     } else {
       const clientDb = await getServerAuthenticatedDb();
-
-      // 1. Try businesses collection
-      try {
-        const docSnap = await getDoc(doc(clientDb, 'businesses', id));
-        if (docSnap.exists()) {
-          business = { id: docSnap.id, ...docSnap.data() };
-        }
-      } catch (e) {
-        // ignore
-      }
-
-      // 2. Fallback to users collection
-      if (!business) {
-        try {
-          const docSnap = await getDoc(doc(clientDb, 'users', id));
-          if (docSnap.exists() && (docSnap.data()?.isBusinessDoc || docSnap.data()?.shopId)) {
-            business = { id: docSnap.id, ...docSnap.data() };
-          }
-        } catch (e) {
-          // ignore
-        }
+      const docSnap = await getDoc(doc(clientDb, 'businesses', id));
+      if (docSnap.exists()) {
+        business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
       }
 
       if (business) {
+        // Primary source: check assignedAdmins already stored in business document
+        if (Array.isArray(business.assignedAdmins) && business.assignedAdmins.length > 0) {
+          admins = [...business.assignedAdmins];
+        }
+
+        if (Array.isArray(business.assignedDoctors) && business.assignedDoctors.length > 0) {
+          doctors = [...business.assignedDoctors];
+        }
+
         try {
-          const q = query(
+          const qAdmins = query(
             collection(clientDb, 'users'),
             where('role', '==', 'admin')
           );
-          const adminsSnap = await getDocs(q);
-          admins = adminsSnap.docs
-            .map((d) => ({ uid: d.id, ...d.data() }))
+          const adminsSnap = await getDocs(qAdmins);
+          const queryAdmins = adminsSnap.docs
+            .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
             .filter(
               (u: any) =>
                 u.businessId === id ||
                 (business.shopId && u.shopId === business.shopId)
             );
+
+          if (queryAdmins.length > 0) {
+            const adminMap = new Map();
+            admins.forEach((a: any) => adminMap.set(a.uid || a.email, a));
+            queryAdmins.forEach((a: any) => adminMap.set(a.uid || a.email, { ...adminMap.get(a.uid || a.email), ...a }));
+            admins = Array.from(adminMap.values());
+          }
         } catch (e: any) {
           console.warn('[Business Admin Query Warning]', e.message);
+        }
+
+        try {
+          const qDoctors = query(
+            collection(clientDb, 'users'),
+            where('role', '==', 'doctor')
+          );
+          const doctorsSnap = await getDocs(qDoctors);
+          const queryDoctors = doctorsSnap.docs
+            .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
+            .filter(
+              (u: any) =>
+                u.businessId === id ||
+                (business.shopId && u.shopId === business.shopId)
+            );
+
+          if (queryDoctors.length > 0) {
+            const docMap = new Map();
+            doctors.forEach((d: any) => docMap.set(d.uid || d.email, d));
+            queryDoctors.forEach((d: any) => docMap.set(d.uid || d.email, { ...docMap.get(d.uid || d.email), ...d }));
+            doctors = Array.from(docMap.values());
+          }
+        } catch (e: any) {
+          console.warn('[Business Doctor Query Warning]', e.message);
         }
       }
     }
@@ -98,6 +135,7 @@ export async function GET(
       success: true,
       business,
       admins,
+      doctors,
     });
   } catch (error: any) {
     console.error('[Business Detail GET Error]', error);
@@ -140,6 +178,8 @@ export async function PUT(
       state,
       country,
       logoUrl,
+      logoPath,
+      storagePath,
       logoPublicId,
       status,
     } = body;
@@ -157,6 +197,9 @@ export async function PUT(
     if (state !== undefined) updateData.state = state.trim();
     if (country !== undefined) updateData.country = country.trim();
     if (logoUrl !== undefined) updateData.logoUrl = logoUrl;
+    if (logoPath !== undefined || storagePath !== undefined) {
+      updateData.logoPath = logoPath || storagePath;
+    }
     if (logoPublicId !== undefined) updateData.logoPublicId = logoPublicId;
     if (status !== undefined) {
       updateData.status = status === 'inactive' ? 'inactive' : 'active';
@@ -167,16 +210,21 @@ export async function PUT(
       delete body.shopId;
     }
 
-    if (hasServiceAccount() && adminDb) {
-      await adminDb.collection('businesses').doc(id).update(updateData);
-    } else {
-      const clientDb = await getServerAuthenticatedDb();
-      try {
+    try {
+      if (hasServiceAccount() && adminDb) {
+        await adminDb.collection('businesses').doc(id).update(updateData);
+      } else {
+        const clientDb = await getServerAuthenticatedDb();
         await updateDoc(doc(clientDb, 'businesses', id), updateData);
-      } catch (e) {
-        // Fallback to users collection
-        await updateDoc(doc(clientDb, 'users', id), updateData);
       }
+    } catch (dbUpdateErr: any) {
+      console.warn(`[Business PUT Server Warning]`, dbUpdateErr.message);
+      return NextResponse.json({
+        success: true,
+        needsClientUpdate: true,
+        updatedFields: updateData,
+        message: 'Updating business profile...',
+      });
     }
 
     return NextResponse.json({
@@ -219,17 +267,10 @@ export async function DELETE(
       });
     } else {
       const clientDb = await getServerAuthenticatedDb();
-      try {
-        await updateDoc(doc(clientDb, 'businesses', id), {
-          status: 'inactive',
-          updatedAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        await updateDoc(doc(clientDb, 'users', id), {
-          status: 'inactive',
-          updatedAt: new Date().toISOString(),
-        });
-      }
+      await updateDoc(doc(clientDb, 'businesses', id), {
+        status: 'inactive',
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     return NextResponse.json({

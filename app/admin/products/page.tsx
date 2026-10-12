@@ -62,12 +62,9 @@ export default function AdminProductsPage() {
       const perms = profile.permissions || [];
       if (
         mods.includes('ecommerce') ||
-        (mods.length === 0 &&
-          (perms.length === 0 ||
-            perms.includes('products') ||
-            perms.includes('p_products') ||
-            perms.includes('dashboard') ||
-            perms.includes('ALL_ACCESS')))
+        perms.includes('products') ||
+        perms.includes('p_products') ||
+        perms.includes('ALL_ACCESS')
       ) {
         return true;
       }
@@ -82,6 +79,13 @@ export default function AdminProductsPage() {
   // 1. Filtered products calculation
   const filteredProducts = React.useMemo(() => {
     return products.filter((p: any) => {
+      if (profile?.role === 'admin' && (profile.shopId || profile.businessId)) {
+        const matchesShop =
+          (profile.shopId && p.shopId === profile.shopId) ||
+          (profile.businessId && p.businessId === profile.businessId);
+        if (!matchesShop) return false;
+      }
+
       const searchLower = searchTerm.toLowerCase().trim();
       const nameMatch = !searchLower || (p.name || '').toLowerCase().includes(searchLower);
       const skuMatch = !searchLower || (p.sku || '').toLowerCase().includes(searchLower);
@@ -93,17 +97,24 @@ export default function AdminProductsPage() {
 
       return searchOk && catOk && petOk;
     });
-  }, [products, searchTerm, selectedCategory, selectedPetType]);
+  }, [products, searchTerm, selectedCategory, selectedPetType, profile]);
 
   // 2. Fetch products fallback helper
   const fetchProducts = async () => {
     setIsLoadingProducts(true);
     setFetchError('');
     try {
-      const res = await fetch('/api/products?forAdmin=true');
+      const shopParam = profile?.role === 'admin' && profile.shopId ? `&shopId=${encodeURIComponent(profile.shopId)}` : '';
+      const res = await fetch(`/api/products?forAdmin=true${shopParam}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.products)) {
-        setProducts(data.products);
+        const scoped = profile?.role === 'admin' && (profile.shopId || profile.businessId)
+          ? data.products.filter((p: any) => 
+              (profile.shopId && p.shopId === profile.shopId) ||
+              (profile.businessId && p.businessId === profile.businessId)
+            )
+          : data.products;
+        setProducts(scoped);
       } else {
         setFetchError(data.error || 'Failed to fetch products from server API.');
       }
@@ -127,10 +138,17 @@ export default function AdminProductsPage() {
       unsubscribe = onSnapshot(
         productsRef,
         (snapshot) => {
-          const productList: any[] = snapshot.docs.map((d) => ({
+          let productList: any[] = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
           }));
+
+          if (profile?.role === 'admin' && (profile.shopId || profile.businessId)) {
+            productList = productList.filter((p: any) =>
+              (profile.shopId && p.shopId === profile.shopId) ||
+              (profile.businessId && p.businessId === profile.businessId)
+            );
+          }
 
           productList.sort((a, b) => {
             const timeA = new Date(a.createdAt || 0).getTime();
@@ -154,7 +172,7 @@ export default function AdminProductsPage() {
     }
 
     return () => unsubscribe();
-  }, []);
+  }, [profile?.shopId, profile?.businessId, profile?.role]);
 
   // 4. Live Active/Inactive Status Toggle Switch
   const handleToggleStatus = async (productId: string, currentIsPublished: boolean) => {
@@ -576,7 +594,7 @@ export default function AdminProductsPage() {
       {/* PAGE HEADER */}
       <PageHeader
         title="Products & Catalog Management"
-        subtitle="Manage inventory, pricing, Cloudinary media, pet details, variants, and store listings."
+        subtitle="Manage inventory, pricing, Firebase Storage media, pet details, variants, and store listings."
         action={
           !isFormOpen && (
             <Button
@@ -731,13 +749,15 @@ export default function AdminProductsPage() {
                 </div>
               </Card>
 
-              {/* SECTION 2: MEDIA & CLOUDINARY IMAGES */}
+              {/* SECTION 2: MEDIA & FIREBASE STORAGE */}
               <Card>
                 <div className="border-b border-[#E8ECF0] pb-3 mb-4">
-                  <h3 className="text-sm font-black text-[#25242A]">2. Product Media & Cloudinary Storage</h3>
-                  <p className="text-xs text-[#777980] font-medium">Upload high-res images directly to Cloudinary folder (healthy-paws/products)</p>
+                  <h3 className="text-sm font-black text-[#25242A]">2. Product Media & Firebase Storage</h3>
+                  <p className="text-xs text-[#777980] font-medium">Upload high-res images directly to Firebase Storage bucket (pet-clinic-47727.firebasestorage.app)</p>
                 </div>
                 <ImageUploader
+                  businessId={profile?.businessId || profile?.shopId || 'default'}
+                  productId={selectedProduct?.id || formData.sku || 'new_product'}
                   initialImages={formData.images}
                   primaryIndex={formData.primaryImageIndex}
                   onChange={(updatedImages, primaryIdx) =>

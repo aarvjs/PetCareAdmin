@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       products = products.filter((p: any) => p.petType === petType || p.suitableAnimal === petType);
     }
     if (shopId && shopId !== 'All') {
-      products = products.filter((p: any) => !p.shopId || p.shopId === shopId);
+      products = products.filter((p: any) => p.shopId === shopId || p.businessId === shopId);
     }
     if (status && status !== 'All') {
       if (status === 'Published' || status === 'Active') {

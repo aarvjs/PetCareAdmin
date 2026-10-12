@@ -35,6 +35,16 @@ export default function DoctorsListPage() {
   const fetchDoctors = async () => {
     setIsLoading(true);
     try {
+      // 1. Fetch via authenticated server-side API route
+      const res = await fetch('/api/super-admin/users?role=doctor');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.users)) {
+        setDoctors(data.users);
+        setFilteredDoctors(data.users);
+        return;
+      }
+
+      // 2. Fallback to client query
       const q = query(collection(db, 'users'), where('role', '==', 'doctor'));
       const snap = await getDocs(q);
       const list: UserProfile[] = [];

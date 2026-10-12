@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { validateEmail, validateIndianMobile } from '@/lib/validation';
 import { useAuth } from '@/lib/authContext';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 interface BusinessOption {
   id: string;
@@ -85,9 +87,8 @@ function CreateAdminContent() {
         if (data.success && Array.isArray(data.businesses)) {
           setBusinesses(data.businesses);
 
-          // If no initial business was selected and list isn't empty, auto-select first active business
-          if (!initialBusinessId && data.businesses.length > 0) {
-            setSelectedBusinessId(data.businesses[0].id);
+          if (initialBusinessId && data.businesses.some((b: any) => b.id === initialBusinessId)) {
+            setSelectedBusinessId(initialBusinessId);
           }
         }
       } catch (e) {
@@ -150,15 +151,10 @@ function CreateAdminContent() {
       return;
     }
 
-    // Exactly Two Module Validation: at least one must be selected
+    // Module selection: E-commerce, Clinic / Doctor, Both, or None
     const selectedModulesList: ('ecommerce' | 'clinic')[] = [];
     if (modules.ecommerce) selectedModulesList.push('ecommerce');
     if (modules.clinic) selectedModulesList.push('clinic');
-
-    if (selectedModulesList.length === 0) {
-      setErrorMessage('Please select at least one module (E-commerce or Clinic / Doctor) for this Admin.');
-      return;
-    }
 
     setIsLoading(true);
 
@@ -189,15 +185,47 @@ function CreateAdminContent() {
 
       setCreatedAdminData({ email: data.user.email, fullName: data.user.fullName });
 
+      // Client-side Firestore sync: ensure business doc reflects the assigned admin
+      if (selectedBusinessId && data.user) {
+        try {
+          const newAdminEntry = {
+            uid: data.user.uid,
+            fullName: data.user.fullName,
+            email: data.user.email,
+            phone: formData.phone.trim(),
+            modules: selectedModulesList,
+            shopId: currentShopId,
+            status: data.user.status || 'active',
+            assignedAt: new Date().toISOString(),
+          };
+          const bizRef = doc(db, 'businesses', selectedBusinessId);
+          const bizSnap = await getDoc(bizRef);
+          if (bizSnap.exists()) {
+            const currentAdmins = bizSnap.data().assignedAdmins || [];
+            const updated = [
+              ...currentAdmins.filter((a: any) => a.uid !== data.user.uid),
+              newAdminEntry,
+            ];
+            await updateDoc(bizRef, {
+              assignedAdmins: updated,
+              adminCount: updated.length,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (bizErr) {
+          console.warn('[Client Business assignedAdmins Sync Warning]', bizErr);
+        }
+      }
+
       if (data.emailSent) {
-        setSuccessMessage(`Admin account for ${data.user.fullName} created & assigned to ${selectedBusiness?.name || currentShopId}!`);
+        setSuccessMessage(data.message || `Admin account for ${data.user.fullName} created & invitation email delivered!`);
       } else {
-        setWarningMessage(`Admin created for ${selectedBusiness?.name || currentShopId}. (Invitation email pending: ${data.emailError || 'Resend error'})`);
+        setWarningMessage(data.message || `Admin created for ${selectedBusiness?.name || currentShopId}. (Invitation email pending: ${data.emailError || 'Email delivery notice'})`);
       }
 
       setTimeout(() => {
         router.push(selectedBusinessId ? `/super-admin/businesses/${selectedBusinessId}` : '/super-admin/admins');
-      }, 1600);
+      }, 2500);
     } catch (err: any) {
       setErrorMessage(err.message || 'Error connecting to server.');
     } finally {

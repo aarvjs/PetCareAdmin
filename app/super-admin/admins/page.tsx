@@ -41,44 +41,30 @@ export default function AdminsListPage() {
 
   const fetchAdmins = async () => {
     setIsLoading(true);
-    const sampleAdmins: UserProfile[] = [
-      {
-        uid: 'adm-001',
-        fullName: 'Vikram Sharma',
-        email: 'admin.vikram@petcare.in',
-        phone: '+91 98765 43210',
-        role: 'admin',
-        status: 'active',
-        createdAt: '2026-01-15T10:00:00Z',
-      },
-      {
-        uid: 'adm-002',
-        fullName: 'Meera Patel',
-        email: 'admin.meera@petcare.in',
-        phone: '+91 98765 11223',
-        role: 'admin',
-        status: 'active',
-        createdAt: '2026-02-01T10:00:00Z',
-      },
-    ];
-
     try {
-      const q = query(collection(db, 'users'), where('role', '==', 'admin'));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const list: UserProfile[] = [];
-        snap.forEach((docSnap) => {
-          list.push(docSnap.data() as UserProfile);
-        });
-        setAdmins(list);
-        setFilteredAdmins(list);
+      // 1. Fetch via authenticated server-side API route (bypasses client Firestore rule restrictions)
+      const res = await fetch('/api/super-admin/users?role=admin');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.users)) {
+        setAdmins(data.users);
+        setFilteredAdmins(data.users);
         return;
       }
-      setAdmins(sampleAdmins);
-      setFilteredAdmins(sampleAdmins);
-    } catch (error) {
-      setAdmins(sampleAdmins);
-      setFilteredAdmins(sampleAdmins);
+
+      // 2. Fallback to client query if server API returns error
+      const q = query(collection(db, 'users'), where('role', '==', 'admin'));
+      const snap = await getDocs(q);
+      const list: UserProfile[] = [];
+      snap.forEach((docSnap) => {
+        list.push(docSnap.data() as UserProfile);
+      });
+      setAdmins(list);
+      setFilteredAdmins(list);
+    } catch (error: any) {
+      console.error('Failed to load admins from database:', error);
+      setAdmins([]);
+      setFilteredAdmins([]);
+      setToastMessage(error.message || 'Failed to fetch admin accounts from database.');
     } finally {
       setIsLoading(false);
     }

@@ -48,8 +48,8 @@ service cloud.firestore {
 
     // ---------- BUSINESSES ----------
     match /businesses/{businessId} {
-      allow read, get, list: if true;
-      allow create, update, delete: if request.auth == null || isSuperAdmin();
+      allow read: if true;
+      allow write: if isSuperAdmin() || isAdmin();
     }
 
     // ---------- USER PROFILES ----------
@@ -63,38 +63,31 @@ service cloud.firestore {
         );
 
       // User profile creation:
-      // Allows signed-in users to create their own initial profile document (or server setup).
-      allow create: if (signedIn() && request.auth.uid == userId)
+      // Allows signed-in users to create their own initial profile document as customer (or server setup).
+      allow create: if (signedIn() && request.auth.uid == userId
+        && (!('role' in request.resource.data) || request.resource.data.role == 'customer'))
+        || isStaff()
         || !exists(/databases/$(database)/documents/users/$(userId));
 
-      // Users cannot modify their own role on update.
-      allow update: if signedIn()
+      // Users cannot modify their own role or administrative assignments on update.
+      allow update: if (signedIn()
         && request.auth.uid == userId
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.diff(resource.data)
-          .affectedKeys()
-          .hasOnly([
-            'name',
-            'fullName',
-            'phone',
-            'photoURL',
-            'address',
-            'updatedAt'
-          ]);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'status', 'businessId', 'shopId', 'permissions']))
+        || isSuperAdmin();
 
       // Only Super Admin manages user profiles and roles.
-      allow update, delete: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
     }
 
     // ---------- PRODUCTS ----------
     match /products/{productId} {
       allow read, get, list: if true;
-      allow create, update, delete: if request.auth == null || isAdmin() || isSuperAdmin();
+      allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 
     // ---------- CATEGORIES ----------
     match /categories/{categoryId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 
@@ -146,13 +139,13 @@ service cloud.firestore {
 
     // ---------- OFFERS ----------
     match /offers/{offerId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 
     // ---------- DOCTORS ----------
     match /doctors/{doctorId} {
-      allow read: if isStaff();
+      allow read: if true;
 
       allow create, update: if isSuperAdmin()
         || isAdmin()
@@ -166,7 +159,7 @@ service cloud.firestore {
 
     // ---------- SERVICES ----------
     match /services/{serviceId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 
@@ -244,7 +237,7 @@ service cloud.firestore {
 
     // ---------- BANNERS ----------
     match /banners/{bannerId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 

@@ -89,13 +89,25 @@ export default function SuperAdminDashboardPage() {
   useEffect(() => {
     async function loadDashboardData() {
       try {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        if (!usersSnap.empty) {
-          const usersData: UserProfile[] = [];
-          usersSnap.forEach((docSnap) => {
-            usersData.push(docSnap.data() as UserProfile);
-          });
-          setUsersList(usersData);
+        let loadedUsers = false;
+        try {
+          const res = await fetch('/api/super-admin/users');
+          const data = await res.json();
+          if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+            setUsersList(data.users);
+            loadedUsers = true;
+          }
+        } catch (apiErr) {}
+
+        if (!loadedUsers) {
+          const usersSnap = await getDocs(collection(db, 'users'));
+          if (!usersSnap.empty) {
+            const usersData: UserProfile[] = [];
+            usersSnap.forEach((docSnap) => {
+              usersData.push(docSnap.data() as UserProfile);
+            });
+            setUsersList(usersData);
+          }
         }
 
         try {

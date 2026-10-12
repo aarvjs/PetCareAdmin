@@ -1,6 +1,9 @@
-import { initializeApp as initAdminApp, getApps as getAdminApps, cert, App } from 'firebase-admin/app';
-import { getAuth as getAdminAuth, Auth } from 'firebase-admin/auth';
-import { getFirestore as getAdminDb, Firestore } from 'firebase-admin/firestore';
+import { initializeApp as initAdminApp, getApps as getAdminApps, cert } from 'firebase-admin/app';
+import type { App } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import type { Auth } from 'firebase-admin/auth';
+import { getFirestore as getAdminDb } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
 
 import { initializeApp as initializeClientApp, getApps as getClientApps } from 'firebase/app';
 import { getAuth as getClientAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword } from 'firebase/auth';
@@ -21,48 +24,13 @@ export function getSharedClientFirestore() {
   return getClientFirestore(app);
 }
 
-let serverAuthenticatedDbInstance: any = null;
-
 export async function getServerAuthenticatedDb() {
-  if (serverAuthenticatedDbInstance) return serverAuthenticatedDbInstance;
   const existingApps = getClientApps();
-  const app = existingApps.length > 0 ? existingApps[0] : initializeClientApp(firebaseConfig);
-  const clientAuth = getClientAuth(app);
+  const app =
+    existingApps.find((a) => a.name === 'ServerAuthDbApp') ||
+    initializeClientApp(firebaseConfig, 'ServerAuthDbApp');
 
-  let userCred: any = null;
-  try {
-    userCred = await signInWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
-  } catch (e: any) {
-    if (e.code === 'auth/invalid-credential' || e.code === 'auth/user-not-found') {
-      try {
-        userCred = await createUserWithEmailAndPassword(clientAuth, 'superadmin@healthypaws.in', 'SuperAdmin123!');
-      } catch (ce) {}
-    }
-  }
-
-  const firestoreDb = getClientFirestore(app);
-  if (userCred?.user?.uid) {
-    try {
-      await setDoc(
-        doc(firestoreDb, 'users', userCred.user.uid),
-        {
-          uid: userCred.user.uid,
-          email: 'superadmin@healthypaws.in',
-          fullName: 'Super Administrator',
-          role: 'super_admin',
-          status: 'active',
-          permissions: ['ALL_ACCESS'],
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (profileErr) {
-      // ignore
-    }
-  }
-
-  serverAuthenticatedDbInstance = firestoreDb;
-  return serverAuthenticatedDbInstance;
+  return getClientFirestore(app);
 }
 
 /**
@@ -316,11 +284,21 @@ export async function isRequestAuthorizedAsProductAdmin(
       } catch (e) {
         // fallback
       }
+    } else {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.user_id || payload.sub) {
+            requesterUid = payload.user_id || payload.sub;
+          }
+        }
+      } catch (e) {}
     }
   }
 
   if (!requesterUid) {
-    return { authorized: true, uid: 'admin-default' };
+    return { authorized: false, error: 'Unauthorized: Authentication required.', status: 401 };
   }
 
   // 1. Try checking via Admin SDK if Service Account keys are active
@@ -344,8 +322,7 @@ export async function isRequestAuthorizedAsProductAdmin(
           modules.includes('ecommerce') ||
           permissions.includes('products') ||
           permissions.includes('p_products') ||
-          permissions.includes('ALL_ACCESS') ||
-          modules.length === 0;
+          permissions.includes('ALL_ACCESS');
 
         if (hasEcommerceModule) {
           return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
@@ -361,10 +338,13 @@ export async function isRequestAuthorizedAsProductAdmin(
 
   // 2. Client SDK Fallback mode for local dev without Service Account keys
   try {
-    const clientDb = getSharedClientFirestore();
+    const clientDb = await getServerAuthenticatedDb();
     const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
     if (docSnap.exists()) {
       const data = docSnap.data();
+      if (data?.status === 'inactive' || data?.status === 'suspended') {
+        return { authorized: false, error: 'User account has been deactivated.', status: 403 };
+      }
       if (data?.role === 'super_admin') {
         return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
       }
@@ -375,11 +355,12 @@ export async function isRequestAuthorizedAsProductAdmin(
           modules.includes('ecommerce') ||
           permissions.includes('products') ||
           permissions.includes('p_products') ||
-          permissions.includes('ALL_ACCESS') ||
-          modules.length === 0;
+          permissions.includes('ALL_ACCESS');
 
         if (hasEcommerceModule) {
           return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
+        } else {
+          return { authorized: false, error: 'Access Denied: E-commerce module has not been enabled for your administrator account.', status: 403 };
         }
       }
     }
@@ -387,7 +368,7 @@ export async function isRequestAuthorizedAsProductAdmin(
     // ignore
   }
 
-  return { authorized: true, uid: requesterUid };
+  return { authorized: false, error: 'Forbidden: E-commerce access unauthorized.', status: 403 };
 }
 
 /**
@@ -409,11 +390,21 @@ export async function isRequestAuthorizedAsClinicAdmin(
       } catch (e) {
         // fallback
       }
+    } else {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.user_id || payload.sub) {
+            requesterUid = payload.user_id || payload.sub;
+          }
+        }
+      } catch (e) {}
     }
   }
 
   if (!requesterUid) {
-    return { authorized: true, uid: 'admin-default' };
+    return { authorized: false, error: 'Unauthorized: Authentication required.', status: 401 };
   }
 
   if (hasServiceAccount() && adminDb) {
@@ -432,8 +423,7 @@ export async function isRequestAuthorizedAsClinicAdmin(
           modules.includes('clinic') ||
           permissions.includes('doctors') ||
           permissions.includes('p_doctors') ||
-          permissions.includes('ALL_ACCESS') ||
-          modules.length === 0;
+          permissions.includes('ALL_ACCESS');
 
         if (hasClinicModule) {
           return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
@@ -446,7 +436,36 @@ export async function isRequestAuthorizedAsClinicAdmin(
     }
   }
 
-  return { authorized: true, uid: requesterUid };
+  try {
+    const clientDb = await getServerAuthenticatedDb();
+    const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (data?.status === 'inactive' || data?.status === 'suspended') {
+        return { authorized: false, error: 'User account has been deactivated.', status: 403 };
+      }
+      if (data?.role === 'super_admin') {
+        return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
+      }
+      if (data?.role === 'admin') {
+        const modules: string[] = data?.modules || [];
+        const permissions: string[] = data?.permissions || [];
+        const hasClinicModule =
+          modules.includes('clinic') ||
+          permissions.includes('doctors') ||
+          permissions.includes('p_doctors') ||
+          permissions.includes('ALL_ACCESS');
+
+        if (hasClinicModule) {
+          return { authorized: true, uid: requesterUid, shopId: data?.shopId, businessId: data?.businessId };
+        } else {
+          return { authorized: false, error: 'Access Denied: Clinic / Doctor module has not been enabled for your administrator account.', status: 403 };
+        }
+      }
+    }
+  } catch (e) {}
+
+  return { authorized: false, error: 'Forbidden: Clinic access unauthorized.', status: 403 };
 }
 
 /**
@@ -480,6 +499,16 @@ export async function isRequestAuthorizedForDoctorCreation(
       } catch (e) {
         // fallback
       }
+    } else {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.user_id || payload.sub) {
+            requesterUid = payload.user_id || payload.sub;
+          }
+        }
+      } catch (e) {}
     }
   }
 
@@ -504,12 +533,14 @@ export async function isRequestAuthorizedForDoctorCreation(
 
   if (!adminProfile) {
     try {
-      const clientDb = getSharedClientFirestore();
+      const clientDb = await getServerAuthenticatedDb();
       const snap = await getDoc(doc(clientDb, 'users', requesterUid));
       if (snap.exists()) {
         adminProfile = snap.data();
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Doctor Auth Check] Profile fetch error:', e);
+    }
   }
 
   if (!adminProfile) {

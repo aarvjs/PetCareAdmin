@@ -1,4 +1,20 @@
 import { Resend } from 'resend';
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth, sendPasswordResetEmail } from 'firebase/auth';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "pet-clinic-47727.firebaseapp.com",
+  projectId: process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "pet-clinic-47727",
+};
+
+function getClientAuth() {
+  const existingApps = getApps();
+  const app =
+    existingApps.find((a) => a.name === 'EmailServiceClientApp') ||
+    initializeApp(firebaseConfig, 'EmailServiceClientApp');
+  return getAuth(app);
+}
 
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'Healthy Paws Pet Clinic <onboarding@resend.dev>';
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -23,30 +39,60 @@ export interface SendAdminInvitationParams {
 
 export interface SendEmailResponse {
   success: boolean;
+  provider?: 'resend' | 'firebase_auth' | 'both' | 'none';
   data?: any;
   error?: string | null;
+  message?: string;
+  details?: {
+    firebaseAuthSuccess: boolean;
+    firebaseAuthError?: string | null;
+    resendSuccess: boolean;
+    resendError?: string | null;
+  };
 }
 
+/**
+ * Dispatches an onboarding invitation to a newly created Admin.
+ * Uses a dual-delivery strategy:
+ * 1. Firebase Authentication: Dispatches an official, time-limited, secure password-setup/reset link.
+ *    Works reliably for all recipient domains with zero domain-verification restrictions.
+ * 2. Resend API: Sends a rich branded HTML invitation email if custom domain is verified.
+ *    Captures and reports Resend sandbox restrictions instead of silently swallowing errors.
+ */
 export async function sendAdminInvitationEmail({
   toEmail,
   fullName,
   tempPassword,
-  createdByName = 'Super Admin',
+  createdByName = 'Super Administrator',
   loginUrl = `${appUrl}/admin-login`,
 }: SendAdminInvitationParams): Promise<SendEmailResponse> {
-  const resend = getResendClient();
+  const targetEmail = toEmail.trim().toLowerCase();
+  let firebaseAuthSuccess = false;
+  let firebaseAuthError: string | null = null;
+  let resendSuccess = false;
+  let resendError: string | null = null;
+  let resendData: any = null;
 
-  if (!resend) {
-    console.error('[Email Service] Missing or unconfigured RESEND_API_KEY environment variable.');
-    return {
-      success: false,
-      error: 'RESEND_API_KEY is not configured on the server.',
-    };
+  // 1. Dispatch secure, time-limited password setup link via Firebase Auth
+  try {
+    const auth = getClientAuth();
+    await sendPasswordResetEmail(auth, targetEmail, {
+      url: loginUrl,
+      handleCodeInApp: false,
+    });
+    firebaseAuthSuccess = true;
+    console.log(`[Email Service] Firebase Auth secure setup link dispatched to ${targetEmail}`);
+  } catch (fbErr: any) {
+    firebaseAuthError = fbErr.message || 'Firebase Auth failed to dispatch setup email';
+    console.warn(`[Email Service] Firebase Auth setup email warning for ${targetEmail}:`, fbErr.message);
   }
 
-  const subject = `You're invited to Healthy Paws Pet Clinic Admin Portal`;
+  // 2. Dispatch branded invitation template via Resend if configured
+  const resend = getResendClient();
+  if (resend) {
+    const subject = `You're invited to Healthy Paws Pet Clinic Admin Portal`;
 
-  const htmlContent = `
+    const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -99,7 +145,7 @@ export async function sendAdminInvitationEmail({
                 <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="4" style="font-size: 13px;">
                   <tr>
                     <td width="110" style="color: #777980; font-weight: 600;">Login ID:</td>
-                    <td style="color: #25242A; font-weight: 700;">${toEmail}</td>
+                    <td style="color: #25242A; font-weight: 700;">${targetEmail}</td>
                   </tr>
                   ${
                     tempPassword
@@ -109,7 +155,12 @@ export async function sendAdminInvitationEmail({
                     <td style="color: #7567E8; font-weight: 700; font-family: monospace; font-size: 14px;">${tempPassword}</td>
                   </tr>
                   `
-                      : ''
+                      : `
+                  <tr>
+                    <td style="color: #777980; font-weight: 600;">Account Password:</td>
+                    <td style="color: #0284C7; font-weight: 700; font-size: 12px;">Activation link dispatched to your email</td>
+                  </tr>
+                  `
                   }
                 </table>
               </div>
@@ -140,26 +191,78 @@ export async function sendAdminInvitationEmail({
   </table>
 </body>
 </html>
-  `;
+    `;
 
-  try {
-    const data = await resend.emails.send({
-      from: fromEmail,
-      to: [toEmail],
-      subject: subject,
-      html: htmlContent,
-    });
+    try {
+      const res = await resend.emails.send({
+        from: fromEmail,
+        to: [targetEmail],
+        subject: subject,
+        html: htmlContent,
+      });
+
+      if (res.error) {
+        resendError = res.error.message;
+        console.warn(`[Email Service] Resend rejected email to ${targetEmail}:`, res.error.message);
+      } else if (res.data?.id) {
+        resendSuccess = true;
+        resendData = res.data;
+        console.log(`[Email Service] Resend branded email delivered to ${targetEmail} (ID: ${res.data.id})`);
+      }
+    } catch (resendCatchErr: any) {
+      resendError = resendCatchErr?.message || 'Resend network error';
+      console.warn(`[Email Service] Resend exception for ${targetEmail}:`, resendCatchErr.message);
+    }
+  } else {
+    resendError = 'RESEND_API_KEY is not configured on the server.';
+  }
+
+  // Combined result determination
+  const details = {
+    firebaseAuthSuccess,
+    firebaseAuthError,
+    resendSuccess,
+    resendError,
+  };
+
+  if (resendSuccess && firebaseAuthSuccess) {
+    return {
+      success: true,
+      provider: 'both',
+      data: resendData,
+      message: `Branded invitation email and secure activation link delivered to ${targetEmail}!`,
+      details,
+    };
+  }
+
+  if (resendSuccess) {
+    return {
+      success: true,
+      provider: 'resend',
+      data: resendData,
+      message: `Branded invitation email delivered to ${targetEmail} via Resend.`,
+      details,
+    };
+  }
+
+  if (firebaseAuthSuccess) {
+    const isResendSandbox = resendError?.includes('only send testing emails') || resendError?.includes('verify a domain');
+    const note = isResendSandbox
+      ? 'Resend sandbox notice: Verify your custom domain at resend.com/domains to send custom branded HTML emails to third-party recipients.'
+      : (resendError || 'Resend delivery pending');
 
     return {
       success: true,
-      data,
-      error: null,
-    };
-  } catch (error: any) {
-    console.error('[Email Service] Failed to send email via Resend:', error);
-    return {
-      success: false,
-      error: error?.message || 'Failed to deliver invitation email via Resend.',
+      provider: 'firebase_auth',
+      message: `Secure account activation link dispatched to ${targetEmail} via Firebase Authentication! (${note})`,
+      details,
     };
   }
+
+  return {
+    success: false,
+    provider: 'none',
+    error: `Failed to deliver email: ${firebaseAuthError || resendError || 'Email delivery service rejected the request.'}`,
+    details,
+  };
 }

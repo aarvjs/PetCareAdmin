@@ -31,6 +31,14 @@ import { StatCard } from '@/components/super-admin/StatCard';
 import { EmptyState } from '@/components/super-admin/EmptyState';
 import { validateEmail, validateIndianMobile } from '@/lib/validation';
 import { useAuth } from '@/lib/authContext';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
+import {
+  uploadFileToFirebaseStorage,
+  deleteFileFromFirebaseStorage,
+  validateImageFile,
+  getBusinessLogoStoragePath,
+} from '@/lib/storage';
 
 export interface BusinessItem {
   id: string;
@@ -44,6 +52,7 @@ export interface BusinessItem {
   state?: string;
   country?: string;
   logoUrl?: string;
+  logoPath?: string;
   logoPublicId?: string;
   status: 'active' | 'inactive';
   adminCount: number;
@@ -84,6 +93,7 @@ export default function BusinessesManagementPage() {
 
   // Logo upload state
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [logoUploadProgress, setLogoUploadProgress] = useState(0);
 
   const [loadError, setLoadError] = useState('');
 
@@ -98,12 +108,12 @@ export default function BusinessesManagementPage() {
     state: '',
     country: 'India',
     logoUrl: '',
+    logoPath: '',
     logoPublicId: '',
     status: 'active' as 'active' | 'inactive',
   });
 
   const fetchBusinesses = async () => {
-    setIsLoading(true);
     setLoadError('');
     try {
       const res = await fetch('/api/super-admin/businesses');
@@ -113,21 +123,45 @@ export default function BusinessesManagementPage() {
         setFilteredBusinesses(data.businesses);
       } else {
         setLoadError(data.error || 'Failed to retrieve registered businesses from database.');
-        setBusinesses([]);
-        setFilteredBusinesses([]);
       }
     } catch (err: any) {
       console.error('Failed to load businesses:', err);
       setLoadError(err.message || 'Network error while fetching businesses.');
-      setBusinesses([]);
-      setFilteredBusinesses([]);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
+    setIsLoading(true);
     fetchBusinesses();
+
+    // Real-time synchronization so newly registered businesses appear immediately without manual page refresh
+    try {
+      const q = collection(db, 'businesses');
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const items: BusinessItem[] = snapshot.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          }));
+          items.sort((a, b) => {
+            const tA = new Date(a.createdAt || 0).getTime();
+            const tB = new Date(b.createdAt || 0).getTime();
+            return tB - tA;
+          });
+          setBusinesses(items);
+          setIsLoading(false);
+        },
+        (err) => {
+          console.warn('[Businesses onSnapshot warning, fallback to API]:', err);
+        }
+      );
+      return () => unsubscribe();
+    } catch (e) {
+      // fallback already covered by fetchBusinesses
+    }
   }, []);
 
   useEffect(() => {
@@ -137,11 +171,11 @@ export default function BusinessesManagementPage() {
       const q = searchQuery.toLowerCase().trim();
       result = result.filter(
         (b) =>
-          b.name.toLowerCase().includes(q) ||
-          b.shopId.toLowerCase().includes(q) ||
-          b.email.toLowerCase().includes(q) ||
-          (b.city && b.city.toLowerCase().includes(q)) ||
-          (b.businessType && b.businessType.toLowerCase().includes(q))
+          (b.name || '').toLowerCase().includes(q) ||
+          (b.shopId || '').toLowerCase().includes(q) ||
+          (b.email || '').toLowerCase().includes(q) ||
+          (b.city || '').toLowerCase().includes(q) ||
+          (b.businessType || '').toLowerCase().includes(q)
       );
     }
 
@@ -164,44 +198,55 @@ export default function BusinessesManagementPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const validation = validateImageFile(file, 10);
+    if (!validation.valid) {
+      alert(validation.error || 'Invalid image file.');
+      return;
+    }
+
     setIsUploadingLogo(true);
-    const data = new FormData();
-    data.append('file', file);
-    data.append('folder', 'healthy-paws/clinics');
+    setLogoUploadProgress(10);
 
     try {
-      const res = await fetch('/api/cloudinary/upload', {
-        method: 'POST',
-        body: data,
-      });
-      const result = await res.json();
+      const targetBizId = isEditMode && editingBiz ? editingBiz.id : `pending_${Date.now()}`;
+      const storagePath = getBusinessLogoStoragePath(targetBizId, file.name);
 
-      if (result.success && result.url) {
-        if (isEditMode && editingBiz) {
-          setEditingBiz({
-            ...editingBiz,
-            logoUrl: result.url,
-            logoPublicId: result.publicId || '',
-          });
-        } else {
-          setFormData((prev) => ({
-            ...prev,
-            logoUrl: result.url,
-            logoPublicId: result.publicId || '',
-          }));
+      const result = await uploadFileToFirebaseStorage(file, storagePath, (progress) => {
+        setLogoUploadProgress(progress.progressPercent);
+      });
+
+      if (isEditMode && editingBiz) {
+        if (editingBiz.logoPath && editingBiz.logoPath !== result.storagePath) {
+          deleteFileFromFirebaseStorage(editingBiz.logoPath).catch(() => {});
         }
+        setEditingBiz({
+          ...editingBiz,
+          logoUrl: result.downloadUrl,
+          logoPath: result.storagePath,
+        });
       } else {
-        alert(result.error || 'Failed to upload clinic logo.');
+        if (formData.logoPath) {
+          deleteFileFromFirebaseStorage(formData.logoPath).catch(() => {});
+        }
+        setFormData((prev) => ({
+          ...prev,
+          logoUrl: result.downloadUrl,
+          logoPath: result.storagePath,
+        }));
       }
     } catch (err: any) {
-      alert(err.message || 'Logo upload failed.');
+      console.error('[Firebase Storage Logo Upload Error]', err);
+      alert(err.message || 'Firebase Storage logo upload failed.');
     } finally {
       setIsUploadingLogo(false);
+      setLogoUploadProgress(0);
+      e.target.value = '';
     }
   };
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return; // Prevent duplicate click submission
     setRegisterError('');
 
     if (!formData.name.trim()) {
@@ -234,17 +279,49 @@ export default function BusinessesManagementPage() {
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        // Safe orphan image cleanup if business creation fails
+        if (formData.logoPath) {
+          deleteFileFromFirebaseStorage(formData.logoPath).catch(() => {});
+        }
         setRegisterError(data.error || 'Failed to register business.');
         setIsSubmitting(false);
         return;
       }
 
+      if (data.needsClientWrite && data.business) {
+        try {
+          const { doc, setDoc } = await import('firebase/firestore');
+          await setDoc(doc(db, 'businesses', data.business.id), data.business);
+        } catch (clientWriteErr: any) {
+          console.warn('[Client Write Fallback]', clientWriteErr.message);
+        }
+      }
+
       if (data.business) {
         setBusinesses((prev) => [data.business, ...prev.filter((b) => b.id !== data.business.id)]);
+        setNewlyCreatedBiz(data.business);
       }
-      setNewlyCreatedBiz(data.business);
-      await fetchBusinesses();
+
+      // Reset form on success
+      setFormData({
+        name: '',
+        businessType: 'Pet Clinic & Hospital',
+        email: '',
+        phone: '',
+        address: '',
+        city: '',
+        state: '',
+        country: 'India',
+        logoUrl: '',
+        logoPath: '',
+        logoPublicId: '',
+        status: 'active',
+      });
     } catch (err: any) {
+      // Safe orphan image cleanup
+      if (formData.logoPath) {
+        deleteFileFromFirebaseStorage(formData.logoPath).catch(() => {});
+      }
       setRegisterError(err.message || 'Network error while registering business.');
     } finally {
       setIsSubmitting(false);
@@ -253,7 +330,7 @@ export default function BusinessesManagementPage() {
 
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingBiz) return;
+    if (!editingBiz || isUpdating) return;
     setEditError('');
 
     if (!editingBiz.name.trim()) {
@@ -277,7 +354,7 @@ export default function BusinessesManagementPage() {
           state: editingBiz.state || '',
           country: editingBiz.country || 'India',
           logoUrl: editingBiz.logoUrl || '',
-          logoPublicId: editingBiz.logoPublicId || '',
+          logoPath: editingBiz.logoPath || '',
           status: editingBiz.status,
           createdByUid: currentSuperAdmin?.uid || 'super_admin',
         }),
@@ -290,10 +367,21 @@ export default function BusinessesManagementPage() {
         return;
       }
 
+      if (data.needsClientUpdate && editingBiz) {
+        try {
+          const { doc, updateDoc } = await import('firebase/firestore');
+          await updateDoc(doc(db, 'businesses', editingBiz.id), data.updatedFields);
+        } catch (clientUpdateErr: any) {
+          console.warn('[Client Update Fallback]', clientUpdateErr.message);
+        }
+      }
+
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === editingBiz.id ? { ...b, ...editingBiz } : b))
+      );
       setEditingBiz(null);
-      await fetchBusinesses();
     } catch (err: any) {
-      setEditError(err.message || 'Network error updating business.');
+      setEditError(err.message || 'Network error while updating business.');
     } finally {
       setIsUpdating(false);
     }
@@ -331,6 +419,7 @@ export default function BusinessesManagementPage() {
               state: '',
               country: 'India',
               logoUrl: '',
+              logoPath: '',
               logoPublicId: '',
               status: 'active',
             });
@@ -807,11 +896,18 @@ export default function BusinessesManagementPage() {
                   </div>
                 </div>
 
-                {/* Optional Clinic Logo Upload */}
+                {/* Clinic Logo (Firebase Storage) */}
                 <div>
-                  <label className="block font-bold text-[#25242A] uppercase tracking-wider mb-1">
-                    Clinic Logo (Optional Cloudinary Upload)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-[#25242A] uppercase tracking-wider text-xs">
+                      Clinic Logo (Firebase Storage)
+                    </label>
+                    {isUploadingLogo && logoUploadProgress > 0 && (
+                      <span className="text-xs font-semibold text-[#7567E8]">
+                        Uploading {logoUploadProgress}%
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-3">
                     {formData.logoUrl ? (
                       <div className="relative">
@@ -822,16 +918,26 @@ export default function BusinessesManagementPage() {
                         />
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, logoUrl: '', logoPublicId: '' })}
-                          className="absolute -top-1.5 -right-1.5 bg-red-500 text-white p-0.5 rounded-full"
+                          onClick={() => {
+                            if (formData.logoPath) {
+                              deleteFileFromFirebaseStorage(formData.logoPath).catch(() => {});
+                            }
+                            setFormData({ ...formData, logoUrl: '', logoPath: '', logoPublicId: '' });
+                          }}
+                          className="absolute -top-1.5 -right-1.5 bg-red-500 text-white p-0.5 rounded-full hover:bg-red-600 transition-colors"
+                          title="Remove logo"
                         >
                           <X className="w-3 h-3" />
                         </button>
                       </div>
                     ) : (
                       <label className="cursor-pointer border border-dashed border-[#CBD5E1] hover:border-[#7567E8] rounded-xl px-4 py-2.5 bg-[#FAFCFD] text-[#777980] hover:text-[#7567E8] flex items-center gap-2 transition-all">
-                        <UploadCloud className="w-4 h-4" />
-                        <span>{isUploadingLogo ? 'Uploading logo...' : 'Upload Clinic Logo'}</span>
+                        {isUploadingLogo ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-[#7567E8]" />
+                        ) : (
+                          <UploadCloud className="w-4 h-4" />
+                        )}
+                        <span>{isUploadingLogo ? `Uploading logo (${logoUploadProgress}%)...` : 'Upload Clinic Logo'}</span>
                         <input
                           type="file"
                           accept="image/*"
@@ -1006,6 +1112,60 @@ export default function BusinessesManagementPage() {
                     onChange={(e) => setEditingBiz({ ...editingBiz, state: e.target.value })}
                     className="w-full bg-[#FAFCFD] border border-[#E8ECF0] focus:border-[#7567E8] px-3 py-2 rounded-xl font-semibold text-[#25242A] outline-hidden"
                   />
+                </div>
+              </div>
+
+              {/* Clinic Logo (Firebase Storage) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-[#25242A] uppercase tracking-wider text-xs">
+                    Clinic Logo (Firebase Storage)
+                  </label>
+                  {isUploadingLogo && logoUploadProgress > 0 && (
+                    <span className="text-xs font-semibold text-[#7567E8]">
+                      Uploading {logoUploadProgress}%
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  {editingBiz.logoUrl ? (
+                    <div className="relative">
+                      <img
+                        src={editingBiz.logoUrl}
+                        alt="Logo Preview"
+                        className="w-12 h-12 rounded-xl object-cover border border-[#E8ECF0]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (editingBiz.logoPath) {
+                            deleteFileFromFirebaseStorage(editingBiz.logoPath).catch(() => {});
+                          }
+                          setEditingBiz({ ...editingBiz, logoUrl: '', logoPath: '' });
+                        }}
+                        className="absolute -top-1.5 -right-1.5 bg-red-500 text-white p-0.5 rounded-full hover:bg-red-600 transition-colors"
+                        title="Remove logo"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer border border-dashed border-[#CBD5E1] hover:border-[#7567E8] rounded-xl px-4 py-2.5 bg-[#FAFCFD] text-[#777980] hover:text-[#7567E8] flex items-center gap-2 transition-all">
+                      {isUploadingLogo ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-[#7567E8]" />
+                      ) : (
+                        <UploadCloud className="w-4 h-4" />
+                      )}
+                      <span>{isUploadingLogo ? `Uploading logo (${logoUploadProgress}%)...` : 'Upload Clinic Logo'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleLogoUpload(e, true)}
+                        disabled={isUploadingLogo}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
                 </div>
               </div>
 

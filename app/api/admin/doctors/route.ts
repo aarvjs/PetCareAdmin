@@ -4,7 +4,7 @@ import {
   createServerUserProfile,
   adminDb,
   hasServiceAccount,
-  getSharedClientFirestore,
+  getServerAuthenticatedDb,
 } from '@/lib/firebaseAdmin';
 import { collection, getDocs, query, where, doc, setDoc } from 'firebase/firestore';
 
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       const snap = await q.get();
       doctors = snap.docs.map((d) => ({ uid: d.id, id: d.id, ...d.data() }));
     } else {
-      const clientDb = getSharedClientFirestore();
+      const clientDb = await getServerAuthenticatedDb();
       try {
         const q = query(collection(clientDb, 'users'), where('role', '==', 'doctor'));
         const snap = await getDocs(q);
@@ -168,13 +168,9 @@ export async function POST(request: Request) {
       await adminDb.collection('users').doc(createdUser.uid).set(extendedDoctorData, { merge: true });
       await adminDb.collection('doctors').doc(createdUser.uid).set(extendedDoctorData, { merge: true });
     } else {
-      const clientDb = getSharedClientFirestore();
-      try {
-        await setDoc(doc(clientDb, 'users', createdUser.uid), extendedDoctorData, { merge: true });
-      } catch (err) {}
-      try {
-        await setDoc(doc(clientDb, 'doctors', createdUser.uid), extendedDoctorData, { merge: true });
-      } catch (err) {}
+      const clientDb = await getServerAuthenticatedDb();
+      await setDoc(doc(clientDb, 'users', createdUser.uid), extendedDoctorData, { merge: true });
+      await setDoc(doc(clientDb, 'doctors', createdUser.uid), extendedDoctorData, { merge: true });
     }
 
     return NextResponse.json({

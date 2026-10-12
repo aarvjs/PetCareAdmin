@@ -9,7 +9,7 @@ import { CheckCircle2, User, Award, Phone, Mail, Clock, AlertCircle } from 'luci
 import { useAuth } from '@/lib/authContext';
 
 export default function DoctorProfilePage() {
-  const { user, profile, updateProfileData } = useAuth();
+  const { user, profile, business, updateProfileData } = useAuth();
 
   const [formData, setFormData] = useState({
     fullName: '',
@@ -24,6 +24,9 @@ export default function DoctorProfilePage() {
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  const currentShopId = business?.shopId || profile?.shopId || '';
+  const clinicName = business?.name || profile?.assignedBusinessName || '';
 
   useEffect(() => {
     if (profile || user) {
@@ -69,6 +72,7 @@ export default function DoctorProfilePage() {
   const getInitials = (name: string) => {
     if (!name) return 'D';
     return name
+      .replace(/^dr\.?\s*/i, '')
       .split(' ')
       .map((n) => n[0])
       .join('')
@@ -105,15 +109,29 @@ export default function DoctorProfilePage() {
               className="w-20 h-20 rounded-2xl object-cover border-2 border-[#72CFF2]"
             />
           ) : (
-            <div className="w-20 h-20 rounded-2xl bg-[#72CFF2] text-[#25242A] flex items-center justify-center font-bold text-2xl border-2 border-[#72CFF2]">
+            <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-[#72CFF2] to-[#7567E8] text-white flex items-center justify-center font-bold text-2xl border-2 border-[#72CFF2] shadow-xs">
               {getInitials(displayName)}
             </div>
           )}
 
-          <div>
+          <div className="min-w-0">
             <h3 className="text-xl font-extrabold text-[#25242A]">{displayName}</h3>
-            <p className="text-xs font-bold text-[#72CFF2]">{displaySpec}</p>
-            <p className="text-xs text-[#737780] font-medium mt-1">{displayQual}</p>
+            <p className="text-xs font-bold text-[#0284C7]">{displaySpec}</p>
+            <p className="text-xs text-[#737780] font-medium mt-0.5">{displayQual}</p>
+            {(clinicName || currentShopId) && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                {clinicName && (
+                  <span className="text-[11px] font-bold text-[#0284C7] bg-[#EAF8FE] px-2.5 py-0.5 rounded-full border border-[#72CFF2]/30">
+                    Clinic: {clinicName}
+                  </span>
+                )}
+                {currentShopId && (
+                  <span className="font-mono text-[10px] font-extrabold text-[#7567E8] bg-[#F1EEFF] px-2.5 py-0.5 rounded-full border border-[#7567E8]/20">
+                    Shop ID: {currentShopId}
+                  </span>
+                )}
+              </div>
+            )}
             <p className="text-[11px] text-[#A0A4AB] font-medium mt-1">UID: {user?.uid || 'Not available'}</p>
           </div>
         </div>

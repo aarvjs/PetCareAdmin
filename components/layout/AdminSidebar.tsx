@@ -43,7 +43,7 @@ interface NavGroup {
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onClose }) => {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile, logout } = useAuth();
+  const { profile, business, logout } = useAuth();
 
   const handleLogout = async () => {
     if (onClose) onClose();
@@ -60,16 +60,14 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
     mods.includes('ecommerce') ||
     perms.includes('products') ||
     perms.includes('p_products') ||
-    perms.includes('ALL_ACCESS') ||
-    (mods.length === 0 && perms.length === 0);
+    perms.includes('ALL_ACCESS');
 
   const hasClinic =
     isSuper ||
     mods.includes('clinic') ||
     perms.includes('doctors') ||
     perms.includes('p_doctors') ||
-    perms.includes('ALL_ACCESS') ||
-    (mods.length === 0 && perms.length === 0);
+    perms.includes('ALL_ACCESS');
 
   const navGroups: NavGroup[] = [
     {
@@ -124,31 +122,50 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
 
   const sidebarContent = (
     <div className="flex flex-col h-full bg-white border-r border-[#E8ECF0]">
-      {/* Brand Header */}
-      <div className="flex items-center justify-between h-16 px-6 border-b border-[#E8ECF0]">
-        <Link href="/admin/dashboard" className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#7567E8] to-[#72CFF2] flex items-center justify-center text-white shadow-xs">
-            <PawPrint className="w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="font-extrabold text-[#25242A] text-base leading-none">PetCare</h1>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#7567E8]">
-                Admin Panel
-              </span>
-              {profile?.shopId && (
-                <span className="font-mono text-[9px] font-extrabold text-[#7567E8] bg-[#F1EEFF] px-1.5 py-0.2 rounded border border-[#7567E8]/20">
-                  {profile.shopId}
-                </span>
-              )}
+      {/* Brand Header with Registered Business Identity */}
+      <div className="p-4 border-b border-[#E8ECF0]">
+        <div className="flex items-center justify-between">
+          <Link href="/admin/dashboard" className="flex items-center gap-3 min-w-0">
+            {business?.logoUrl ? (
+              <img
+                src={business.logoUrl}
+                alt={business.name || 'Clinic'}
+                className="w-10 h-10 rounded-xl object-cover border border-[#E8ECF0] shrink-0 shadow-2xs"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#7567E8] to-[#72CFF2] flex items-center justify-center text-white shadow-xs shrink-0">
+                <PawPrint className="w-5 h-5" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <h1 className="font-extrabold text-[#25242A] text-sm leading-tight truncate" title={business?.name || 'PetCare'}>
+                {business?.name || 'PetCare'}
+              </h1>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                {(business?.shopId || profile?.shopId) && (
+                  <span className="font-mono text-[9px] font-extrabold text-[#7567E8] bg-[#F1EEFF] px-1.5 py-0.5 rounded border border-[#7567E8]/20 tracking-wider">
+                    {business?.shopId || profile?.shopId}
+                  </span>
+                )}
+                {hasEcommerce && (
+                  <span className="text-[8px] font-extrabold text-purple-700 bg-purple-50 px-1 py-0.2 rounded border border-purple-200 uppercase">
+                    E-com
+                  </span>
+                )}
+                {hasClinic && (
+                  <span className="text-[8px] font-extrabold text-sky-700 bg-sky-50 px-1 py-0.2 rounded border border-sky-200 uppercase">
+                    Clinic
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        </Link>
-        {onClose && (
-          <button onClick={onClose} className="lg:hidden p-1 text-[#737780] hover:text-[#25242A]">
-            <X className="w-5 h-5" />
-          </button>
-        )}
+          </Link>
+          {onClose && (
+            <button onClick={onClose} className="lg:hidden p-1 text-[#737780] hover:text-[#25242A]">
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Navigation List */}
@@ -189,13 +206,28 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
         ))}
       </div>
 
-      {/* Footer / Logout */}
-      <div className="p-4 border-t border-[#E8ECF0]">
+      {/* Footer / Admin Card & Logout */}
+      <div className="p-4 border-t border-[#E8ECF0] space-y-3">
+        {profile && (
+          <div className="p-2.5 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-[#7567E8] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+              {profile.fullName?.charAt(0)?.toUpperCase() || 'A'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-extrabold text-[#25242A] truncate leading-tight">
+                {profile.fullName}
+              </p>
+              <p className="text-[9px] text-[#737780] truncate mt-0.5">
+                {profile.email}
+              </p>
+            </div>
+          </div>
+        )}
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-[#E46A6A] hover:bg-red-50 transition-colors text-left"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-[#E46A6A] hover:bg-red-50 transition-colors text-left"
         >
-          <LogOut className="w-5 h-5" />
+          <LogOut className="w-4 h-4" />
           <span>Logout</span>
         </button>
       </div>

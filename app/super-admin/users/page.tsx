@@ -19,6 +19,16 @@ export default function AllUsersDirectoryPage() {
   const fetchUsers = async () => {
     setIsLoading(true);
     try {
+      // 1. Fetch via authenticated server-side API route
+      const res = await fetch('/api/super-admin/users');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.users)) {
+        setUsers(data.users);
+        setFilteredUsers(data.users);
+        return;
+      }
+
+      // 2. Fallback to client query
       const snap = await getDocs(collection(db, 'users'));
       const list: UserProfile[] = [];
       snap.forEach((docSnap) => {
