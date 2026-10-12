@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { useAuth } from '@/lib/authContext';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 import {
   DollarSign,
   ShoppingCart,
@@ -26,11 +28,13 @@ import {
   User,
   Dog,
 } from 'lucide-react';
-import { INITIAL_ORDERS, INITIAL_APPOINTMENTS, INITIAL_PRODUCTS } from '@/lib/mockData';
+import { INITIAL_PRODUCTS } from '@/lib/mockData';
 
 export default function AdminDashboardPage() {
   const { profile, business } = useAuth();
   const [copiedShopId, setCopiedShopId] = useState(false);
+  const [recentOrders, setRecentOrders] = useState<any[]>([]);
+  const [recentAppointments, setRecentAppointments] = useState<any[]>([]);
 
   const isSuper = profile?.role === 'super_admin';
   const mods = profile?.modules || [];
@@ -60,6 +64,59 @@ export default function AdminDashboardPage() {
       setTimeout(() => setCopiedShopId(false), 2000);
     }
   };
+
+  // Real-time Firestore Listeners for Orders and Appointments
+  useEffect(() => {
+    if (!profile) return;
+    const targetShopId = profile.shopId;
+    const targetBizId = profile.businessId;
+
+    let unsubOrders = () => {};
+    let unsubAppointments = () => {};
+
+    try {
+      unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
+        let list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        if (profile.role === 'admin' && (targetShopId || targetBizId)) {
+          list = list.filter((ord) => {
+            const matchesShop = targetShopId && ord.shopId === targetShopId;
+            const matchesBiz = targetBizId && ord.businessId === targetBizId;
+            return matchesShop || matchesBiz;
+          });
+        }
+        list.sort((a, b) => {
+          const timeA = new Date(a.createdAt?.toDate?.() || a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt?.toDate?.() || b.createdAt || 0).getTime();
+          return timeB - timeA;
+        });
+        setRecentOrders(list.slice(0, 5));
+      });
+
+      unsubAppointments = onSnapshot(collection(db, 'appointments'), (snap) => {
+        let list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        if (profile.role === 'admin' && (targetShopId || targetBizId)) {
+          list = list.filter((apt) => {
+            const matchesShop = targetShopId && apt.shopId === targetShopId;
+            const matchesBiz = targetBizId && apt.businessId === targetBizId;
+            return matchesShop || matchesBiz;
+          });
+        }
+        list.sort((a, b) => {
+          const timeA = new Date(a.createdAt?.toDate?.() || a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt?.toDate?.() || b.createdAt || 0).getTime();
+          return timeB - timeA;
+        });
+        setRecentAppointments(list.slice(0, 5));
+      });
+    } catch (e) {
+      console.warn('Dashboard stream error', e);
+    }
+
+    return () => {
+      unsubOrders();
+      unsubAppointments();
+    };
+  }, [profile]);
 
   // E-commerce metrics
   const ecommerceStats = [
@@ -336,16 +393,28 @@ export default function AdminDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E8ECF0]">
-                  {INITIAL_ORDERS.map((ord) => (
-                    <tr key={ord.id} className="hover:bg-[#F8FAFC]">
-                      <td className="py-3 px-3 font-bold text-[#7567E8]">{ord.id}</td>
-                      <td className="py-3 px-3 font-semibold text-[#25242A]">{ord.customerName}</td>
-                      <td className="py-3 px-3 font-bold text-[#25242A]">₹{ord.amount.toFixed(2)}</td>
-                      <td className="py-3 px-3">
-                        <StatusBadge status={ord.orderStatus} />
+                  {recentOrders.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-[#737780] text-xs">
+                        No orders recorded yet.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    recentOrders.map((ord) => {
+                      const orderCode = ord.orderId || `#${ord.id.slice(-6).toUpperCase()}`;
+                      const amount = typeof ord.totalAmount === 'number' ? ord.totalAmount : ord.amount || 0;
+                      return (
+                        <tr key={ord.id} className="hover:bg-[#F8FAFC] transition-colors">
+                          <td className="py-3 px-3 font-mono font-bold text-[#7567E8]">{orderCode}</td>
+                          <td className="py-3 px-3 font-semibold text-[#25242A]">{ord.customerName || 'Customer'}</td>
+                          <td className="py-3 px-3 font-bold text-[#25242A]">₹{amount.toFixed(2)}</td>
+                          <td className="py-3 px-3">
+                            <StatusBadge status={ord.status || ord.orderStatus || 'Pending'} />
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -373,19 +442,27 @@ export default function AdminDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E8ECF0]">
-                  {INITIAL_APPOINTMENTS.map((apt) => (
-                    <tr key={apt.id} className="hover:bg-[#F8FAFC]">
-                      <td className="py-3 px-3">
-                        <p className="font-bold text-[#25242A]">{apt.petName} ({apt.petType})</p>
-                        <p className="text-[11px] text-[#737780]">Owner: {apt.ownerName}</p>
-                      </td>
-                      <td className="py-3 px-3 font-medium text-[#25242A]">{apt.service}</td>
-                      <td className="py-3 px-3 text-[#737780] font-semibold">{apt.time}</td>
-                      <td className="py-3 px-3">
-                        <StatusBadge status={apt.status} />
+                  {recentAppointments.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-[#737780] text-xs">
+                        No appointments booked yet.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    recentAppointments.map((apt) => (
+                      <tr key={apt.id} className="hover:bg-[#F8FAFC] transition-colors">
+                        <td className="py-3 px-3">
+                          <p className="font-bold text-[#25242A]">{apt.petName} ({apt.petType || 'Pet'})</p>
+                          <p className="text-[11px] text-[#737780]">Owner: {apt.customerName || apt.ownerName || 'Parent'}</p>
+                        </td>
+                        <td className="py-3 px-3 font-medium text-[#25242A]">{apt.serviceName || apt.service || 'Consultation'}</td>
+                        <td className="py-3 px-3 text-[#737780] font-semibold">{apt.appointmentTime || apt.time || 'TBD'}</td>
+                        <td className="py-3 px-3">
+                          <StatusBadge status={apt.status || 'Pending'} />
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

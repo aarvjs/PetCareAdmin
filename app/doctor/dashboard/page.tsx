@@ -7,6 +7,8 @@ import { Card } from '@/components/ui/Card';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/lib/authContext';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 import {
   Calendar,
   Clock,
@@ -25,7 +27,7 @@ import {
   Mail,
   Stethoscope,
 } from 'lucide-react';
-import { INITIAL_APPOINTMENTS, INITIAL_PETS } from '@/lib/mockData';
+import { INITIAL_PETS } from '@/lib/mockData';
 
 export default function DoctorDashboardPage() {
   const { profile, business } = useAuth();
@@ -56,9 +58,47 @@ export default function DoctorDashboardPage() {
     }
   };
 
-  const doctorAppointments = INITIAL_APPOINTMENTS.filter(
-    (a) => a.doctorName.includes('Ananya') || true
-  );
+  const [doctorAppointments, setDoctorAppointments] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const docUid = profile.uid;
+    const docName = (profile.fullName || '').trim().toLowerCase();
+    const docShopId = profile.shopId;
+    const docBizId = profile.businessId;
+
+    try {
+      const unsub = onSnapshot(collection(db, 'appointments'), (snap) => {
+        let list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        list = list.filter((apt) => {
+          const matchesId = apt.doctorId && apt.doctorId === docUid;
+          const matchesName =
+            docName &&
+            apt.doctorName &&
+            (apt.doctorName.toLowerCase().includes(docName) ||
+              docName.includes(apt.doctorName.toLowerCase().replace(/^dr\.?\s*/i, '')));
+          const matchesClinicShop = docShopId && apt.shopId === docShopId;
+          const matchesClinicBiz = docBizId && apt.businessId === docBizId;
+          return matchesId || matchesName || matchesClinicShop || matchesClinicBiz;
+        });
+
+        list.sort((a, b) => {
+          const timeA = new Date(a.createdAt?.toDate?.() || a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt?.toDate?.() || b.createdAt || 0).getTime();
+          return timeB - timeA;
+        });
+
+        setDoctorAppointments(list);
+      });
+
+      return () => unsub();
+    } catch (e) {
+      console.warn('Doctor dashboard appointments error', e);
+    }
+  }, [profile]);
+
+  const pendingCount = doctorAppointments.filter((a) => a.status === 'Pending').length;
+  const completedCount = doctorAppointments.filter((a) => a.status === 'Completed').length;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -198,12 +238,12 @@ export default function DoctorDashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card padding="p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#737780]">Today Appointments</span>
+            <span className="text-xs font-medium text-[#737780]">Total Assigned</span>
             <div className="p-2 rounded-xl bg-[#EAF8FE] text-[#0284C7]">
               <Calendar className="w-4 h-4" />
             </div>
           </div>
-          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">4</h3>
+          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">{doctorAppointments.length}</h3>
         </Card>
 
         <Card padding="p-4">
@@ -213,27 +253,27 @@ export default function DoctorDashboardPage() {
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">1</h3>
+          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">{pendingCount}</h3>
         </Card>
 
         <Card padding="p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#737780]">Completed Today</span>
+            <span className="text-xs font-medium text-[#737780]">Completed</span>
             <div className="p-2 rounded-xl bg-[#DFF7EE] text-[#35B779]">
               <CheckCircle className="w-4 h-4" />
             </div>
           </div>
-          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">2</h3>
+          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">{completedCount}</h3>
         </Card>
 
         <Card padding="p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#737780]">Total Patients</span>
+            <span className="text-xs font-medium text-[#737780]">Active Patients</span>
             <div className="p-2 rounded-xl bg-[#F1EEFF] text-[#7567E8]">
               <UserCheck className="w-4 h-4" />
             </div>
           </div>
-          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">142</h3>
+          <h3 className="text-2xl font-extrabold text-[#25242A] mt-2">{doctorAppointments.length}</h3>
         </Card>
       </div>
 
@@ -262,19 +302,33 @@ export default function DoctorDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8ECF0]">
-                {doctorAppointments.map((apt) => (
-                  <tr key={apt.id} className="hover:bg-[#F8FAFC]">
-                    <td className="py-3 px-3">
-                      <p className="font-bold text-[#25242A]">{apt.petName}</p>
-                      <p className="text-[11px] text-[#737780]">{apt.petType} • Owner: {apt.ownerName}</p>
-                    </td>
-                    <td className="py-3 px-3 font-semibold text-[#0284C7]">{apt.service}</td>
-                    <td className="py-3 px-3 text-[#737780] font-medium">{apt.time}</td>
-                    <td className="py-3 px-3">
-                      <StatusBadge status={apt.status} />
+                {doctorAppointments.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-[#737780] text-xs">
+                      No appointments assigned yet.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  doctorAppointments.slice(0, 5).map((apt) => (
+                    <tr key={apt.id} className="hover:bg-[#F8FAFC] transition-colors">
+                      <td className="py-3 px-3">
+                        <p className="font-bold text-[#25242A]">{apt.petName}</p>
+                        <p className="text-[11px] text-[#737780]">
+                          {apt.petType || 'Pet'} • Owner: {apt.customerName || apt.ownerName || 'Pet Parent'}
+                        </p>
+                      </td>
+                      <td className="py-3 px-3 font-semibold text-[#0284C7]">
+                        {apt.serviceName || apt.service || 'Consultation'}
+                      </td>
+                      <td className="py-3 px-3 text-[#737780] font-medium">
+                        {apt.appointmentTime || apt.time || 'TBD'}
+                      </td>
+                      <td className="py-3 px-3">
+                        <StatusBadge status={apt.status || 'Pending'} />
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
