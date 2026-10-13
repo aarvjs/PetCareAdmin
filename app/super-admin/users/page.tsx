@@ -8,6 +8,7 @@ import { UserProfile } from '@/lib/authContext';
 import { UserStatusBadge } from '@/components/super-admin/UserStatusBadge';
 import { EmptyState } from '@/components/super-admin/EmptyState';
 import { Users, Search, Filter, ShieldCheck, Stethoscope, Crown, Eye } from 'lucide-react';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function AllUsersDirectoryPage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -20,9 +21,8 @@ export default function AllUsersDirectoryPage() {
     setIsLoading(true);
     try {
       // 1. Fetch via authenticated server-side API route
-      const res = await fetch('/api/super-admin/users');
-      const data = await res.json();
-      if (data.success && Array.isArray(data.users)) {
+      const { data } = await safeFetchJson<{ success: boolean; users?: UserProfile[] }>('/api/super-admin/users');
+      if (data && data.success && Array.isArray(data.users)) {
         setUsers(data.users);
         setFilteredUsers(data.users);
         return;

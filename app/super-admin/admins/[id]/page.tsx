@@ -23,6 +23,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function AdminDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
@@ -152,7 +153,7 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
     }
 
     try {
-      const res = await fetch('/api/super-admin/users', {
+      const { ok, data, errorText } = await safeFetchJson<any>('/api/super-admin/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,9 +167,8 @@ export default function AdminDetailPage({ params }: { params: Promise<{ id: stri
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setErrorMessage(data.error || 'Failed to update Admin account.');
+      if (!ok || !data?.success) {
+        setErrorMessage(data?.error || errorText || 'Failed to update Admin account.');
         setIsSaving(false);
         return;
       }

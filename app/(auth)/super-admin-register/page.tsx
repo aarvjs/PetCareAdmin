@@ -21,9 +21,10 @@ import {
   Sparkles,
   Shield,
   KeyRound,
-  LockKeyhole
+  LockKeyhole,
 } from 'lucide-react';
 import { validateEmail, validateIndianMobile } from '@/lib/validation';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function SuperAdminRegisterPage() {
   const router = useRouter();
@@ -48,9 +49,8 @@ export default function SuperAdminRegisterPage() {
   useEffect(() => {
     async function checkBootstrapState() {
       try {
-        const res = await fetch('/api/super-admin/bootstrap');
-        const data = await res.json();
-        if (data.hasSuperAdmin) {
+        const { data } = await safeFetchJson<{ hasSuperAdmin?: boolean }>('/api/super-admin/bootstrap');
+        if (data?.hasSuperAdmin) {
           setIsAlreadyProvisioned(true);
         }
       } catch (e) {
@@ -106,17 +106,15 @@ export default function SuperAdminRegisterPage() {
     setIsLoading(true);
 
     try {
-      const res = await fetch('/api/super-admin/bootstrap', {
+      const { ok, status, data, errorText } = await safeFetchJson<any>('/api/super-admin/bootstrap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
 
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        setErrorMessage(data.error?.message || 'Failed to complete Super Admin setup.');
-        if (res.status === 403) {
+      if (!ok || !data?.success) {
+        setErrorMessage(data?.error?.message || errorText || 'Failed to complete Super Admin setup.');
+        if (status === 403) {
           setIsAlreadyProvisioned(true);
         }
         setIsLoading(false);

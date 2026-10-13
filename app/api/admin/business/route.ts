@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
-import { getServerAuthenticatedDb, adminDb, hasServiceAccount } from '@/lib/firebaseAdmin';
+import {
+  getServerAuthenticatedDb,
+  adminDb,
+  hasServiceAccount,
+  fetchFirestoreDocRest,
+  queryFirestoreByFieldRest,
+} from '@/lib/firebaseAdmin';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
+export const dynamic = 'force-dynamic';
+
 /**
- * GET /api/admin/business
  * Verifies and fetches the registered business document associated with an Admin.
  * Checks business existence, active status, and canonical Shop ID.
  */
@@ -31,7 +38,22 @@ export async function GET(request: Request) {
         } catch (e) {
           console.warn('[Admin Business GET] Admin profile fetch warning:', e);
         }
-      } else {
+      }
+      
+      if (!adminProfile) {
+        try {
+          const restUser = await fetchFirestoreDocRest('users', uid);
+          if (restUser) {
+            adminProfile = restUser;
+            targetBusinessId = targetBusinessId || adminProfile.businessId || '';
+            targetShopId = targetShopId || adminProfile.shopId || '';
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (!adminProfile) {
         try {
           const clientDb = await getServerAuthenticatedDb();
           const uSnap = await getDoc(doc(clientDb, 'users', uid));
@@ -77,7 +99,24 @@ export async function GET(request: Request) {
           bizDoc = { id: qSnap.docs[0].id, ...qSnap.docs[0].data() };
         }
       }
-    } else {
+    }
+
+    // 2b. Fast REST API fallback
+    if (!bizDoc) {
+      try {
+        if (targetBusinessId) {
+          bizDoc = await fetchFirestoreDocRest('businesses', targetBusinessId);
+        }
+        if (!bizDoc && targetShopId) {
+          bizDoc = await queryFirestoreByFieldRest('businesses', 'shopId', targetShopId);
+        }
+      } catch (e) {
+        console.warn('[Admin Business GET] REST fallback warning:', e);
+      }
+    }
+
+    // 2c. Client SDK fallback
+    if (!bizDoc) {
       const clientDb = await getServerAuthenticatedDb();
 
       if (targetBusinessId) {

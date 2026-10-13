@@ -39,6 +39,7 @@ import {
   validateImageFile,
   getBusinessLogoStoragePath,
 } from '@/lib/storage';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export interface BusinessItem {
   id: string;
@@ -114,19 +115,23 @@ export default function BusinessesManagementPage() {
   });
 
   const fetchBusinesses = async () => {
-    setLoadError('');
     try {
-      const res = await fetch('/api/super-admin/businesses');
-      const data = await res.json();
-      if (data.success && Array.isArray(data.businesses)) {
-        setBusinesses(data.businesses);
-        setFilteredBusinesses(data.businesses);
+      const res = await safeFetchJson<{ success: boolean; businesses: BusinessItem[]; error?: string }>('/api/super-admin/businesses');
+      if (res.ok && res.data?.success && Array.isArray(res.data.businesses)) {
+        setBusinesses(res.data.businesses);
+        setFilteredBusinesses(res.data.businesses);
+        setLoadError('');
       } else {
-        setLoadError(data.error || 'Failed to retrieve registered businesses from database.');
+        // Only set error if we don't already have live data from onSnapshot
+        setBusinesses((current) => {
+          if (current.length === 0) {
+            setLoadError(res.error || res.data?.error || 'Unable to retrieve businesses.');
+          }
+          return current;
+        });
       }
     } catch (err: any) {
-      console.error('Failed to load businesses:', err);
-      setLoadError(err.message || 'Network error while fetching businesses.');
+      console.warn('API fetchBusinesses warning:', err);
     } finally {
       setIsLoading(false);
     }
@@ -152,6 +157,9 @@ export default function BusinessesManagementPage() {
             return tB - tA;
           });
           setBusinesses(items);
+          if (items.length > 0) {
+            setLoadError('');
+          }
           setIsLoading(false);
         },
         (err) => {
@@ -267,7 +275,12 @@ export default function BusinessesManagementPage() {
     setIsSubmitting(true);
 
     try {
-      const res = await fetch('/api/super-admin/businesses', {
+      const res = await safeFetchJson<{
+        success: boolean;
+        business?: BusinessItem;
+        needsClientWrite?: boolean;
+        error?: string;
+      }>('/api/super-admin/businesses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -276,14 +289,14 @@ export default function BusinessesManagementPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = res.data;
 
-      if (!res.ok || !data.success) {
+      if (!res.ok || !data?.success) {
         // Safe orphan image cleanup if business creation fails
         if (formData.logoPath) {
           deleteFileFromFirebaseStorage(formData.logoPath).catch(() => {});
         }
-        setRegisterError(data.error || 'Failed to register business.');
+        setRegisterError(res.error || data?.error || 'Failed to register business.');
         setIsSubmitting(false);
         return;
       }
@@ -298,7 +311,7 @@ export default function BusinessesManagementPage() {
       }
 
       if (data.business) {
-        setBusinesses((prev) => [data.business, ...prev.filter((b) => b.id !== data.business.id)]);
+        setBusinesses((prev) => [data.business!, ...prev.filter((b) => b.id !== data.business!.id)]);
         setNewlyCreatedBiz(data.business);
       }
 
@@ -341,7 +354,12 @@ export default function BusinessesManagementPage() {
     setIsUpdating(true);
 
     try {
-      const res = await fetch(`/api/super-admin/businesses/${editingBiz.id}`, {
+      const res = await safeFetchJson<{
+        success: boolean;
+        needsClientUpdate?: boolean;
+        updatedFields?: Record<string, any>;
+        error?: string;
+      }>(`/api/super-admin/businesses/${editingBiz.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -360,14 +378,14 @@ export default function BusinessesManagementPage() {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setEditError(data.error || 'Failed to update business.');
+      const data = res.data;
+      if (!res.ok || !data?.success) {
+        setEditError(res.error || data?.error || 'Failed to update business.');
         setIsUpdating(false);
         return;
       }
 
-      if (data.needsClientUpdate && editingBiz) {
+      if (data.needsClientUpdate && editingBiz && data.updatedFields) {
         try {
           const { doc, updateDoc } = await import('firebase/firestore');
           await updateDoc(doc(db, 'businesses', editingBiz.id), data.updatedFields);

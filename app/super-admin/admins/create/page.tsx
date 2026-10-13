@@ -25,8 +25,9 @@ import {
 } from 'lucide-react';
 import { validateEmail, validateIndianMobile } from '@/lib/validation';
 import { useAuth } from '@/lib/authContext';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 interface BusinessOption {
   id: string;
@@ -82,12 +83,19 @@ function CreateAdminContent() {
     async function loadBusinesses() {
       setIsLoadingBusinesses(true);
       try {
-        const res = await fetch('/api/super-admin/businesses');
-        const data = await res.json();
-        if (data.success && Array.isArray(data.businesses)) {
-          setBusinesses(data.businesses);
+        const res = await safeFetchJson<{ success: boolean; businesses: BusinessOption[] }>('/api/super-admin/businesses');
+        let bizList: BusinessOption[] = [];
+        if (res.ok && res.data?.success && Array.isArray(res.data.businesses)) {
+          bizList = res.data.businesses;
+        } else {
+          const snap = await getDocs(collection(db, 'businesses'));
+          bizList = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        }
 
-          if (initialBusinessId && data.businesses.some((b: any) => b.id === initialBusinessId)) {
+        if (bizList.length > 0) {
+          setBusinesses(bizList);
+
+          if (initialBusinessId && bizList.some((b: any) => b.id === initialBusinessId)) {
             setSelectedBusinessId(initialBusinessId);
           }
         }
@@ -159,7 +167,14 @@ function CreateAdminContent() {
     setIsLoading(true);
 
     try {
-      const res = await fetch('/api/super-admin/admins/create', {
+      const res = await safeFetchJson<{
+        success: boolean;
+        user?: any;
+        error?: any;
+        emailSent?: boolean;
+        message?: string;
+        emailError?: string;
+      }>('/api/super-admin/admins/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,10 +190,10 @@ function CreateAdminContent() {
         }),
       });
 
-      const data = await res.json();
+      const data = res.data;
 
-      if (!res.ok || !data.success) {
-        setErrorMessage(data.error?.message || 'Failed to create Admin account.');
+      if (!res.ok || !data?.success) {
+        setErrorMessage(res.error || data?.error?.message || data?.error || 'Failed to create Admin account.');
         setIsLoading(false);
         return;
       }
@@ -237,7 +252,7 @@ function CreateAdminContent() {
     if (!createdAdminData) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/super-admin/admins/resend-invitation', {
+      const { ok, data, errorText } = await safeFetchJson<any>('/api/super-admin/admins/resend-invitation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -246,12 +261,11 @@ function CreateAdminContent() {
           tempPassword: formData.password,
         }),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (ok && data?.success) {
         setSuccessMessage(`Invitation email resent to ${createdAdminData.email}!`);
         setWarningMessage('');
       } else {
-        setErrorMessage(data.error?.message || 'Failed to resend email invitation.');
+        setErrorMessage(data?.error?.message || errorText || 'Failed to resend email invitation.');
       }
     } catch (e: any) {
       setErrorMessage(e.message || 'Resend failed.');

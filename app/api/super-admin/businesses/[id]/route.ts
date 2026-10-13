@@ -7,9 +7,12 @@ import {
 } from '@/lib/firebaseAdmin';
 import { collection, getDocs, doc, getDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/super-admin/businesses/[id]
- * Fetch business record and all assigned admins
+ * Fetch business record and all assigned admins.
+ * Supports resolution by both Firestore document ID (e.g. biz_...) and permanent Shop ID (e.g. SHOP-D9E8).
  */
 export async function GET(
   request: Request,
@@ -17,118 +20,159 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const cleanId = id?.trim();
+
+    if (!cleanId) {
+      return NextResponse.json(
+        { success: false, error: 'Business ID is required.' },
+        { status: 400 }
+      );
+    }
 
     let business: any = null;
     let admins: any[] = [];
     let doctors: any[] = [];
 
+    // Layer 1: Admin SDK if service account is active
     if (hasServiceAccount() && adminDb) {
-      const docSnap = await adminDb.collection('businesses').doc(id).get();
-      if (docSnap.exists) {
-        business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
-      }
-
-      if (business) {
-        // Query admins by businessId or shopId
-        const adminsSnap = await adminDb
-          .collection('users')
-          .where('role', '==', 'admin')
-          .get();
-
-        admins = adminsSnap.docs
-          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
-          .filter(
-            (u: any) =>
-              u.businessId === id ||
-              (business.shopId && u.shopId === business.shopId)
-          );
-
-        // Query doctors by businessId or shopId
-        const doctorsSnap = await adminDb
-          .collection('users')
-          .where('role', '==', 'doctor')
-          .get();
-
-        doctors = doctorsSnap.docs
-          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
-          .filter(
-            (u: any) =>
-              u.businessId === id ||
-              (business.shopId && u.shopId === business.shopId)
-          );
-      }
-    } else {
-      const clientDb = await getServerAuthenticatedDb();
-      const docSnap = await getDoc(doc(clientDb, 'businesses', id));
-      if (docSnap.exists()) {
-        business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
-      }
-
-      if (business) {
-        // Primary source: check assignedAdmins already stored in business document
-        if (Array.isArray(business.assignedAdmins) && business.assignedAdmins.length > 0) {
-          admins = [...business.assignedAdmins];
-        }
-
-        if (Array.isArray(business.assignedDoctors) && business.assignedDoctors.length > 0) {
-          doctors = [...business.assignedDoctors];
-        }
-
-        try {
-          const qAdmins = query(
-            collection(clientDb, 'users'),
-            where('role', '==', 'admin')
-          );
-          const adminsSnap = await getDocs(qAdmins);
-          const queryAdmins = adminsSnap.docs
-            .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
-            .filter(
-              (u: any) =>
-                u.businessId === id ||
-                (business.shopId && u.shopId === business.shopId)
-            );
-
-          if (queryAdmins.length > 0) {
-            const adminMap = new Map();
-            admins.forEach((a: any) => adminMap.set(a.uid || a.email, a));
-            queryAdmins.forEach((a: any) => adminMap.set(a.uid || a.email, { ...adminMap.get(a.uid || a.email), ...a }));
-            admins = Array.from(adminMap.values());
+      try {
+        // A. Direct doc ID lookup
+        const docSnap = await adminDb.collection('businesses').doc(cleanId).get();
+        if (docSnap.exists) {
+          business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
+        } else {
+          // B. Query by shopId (e.g. SHOP-D9E8)
+          const qShop = await adminDb
+            .collection('businesses')
+            .where('shopId', '==', cleanId)
+            .limit(1)
+            .get();
+          if (!qShop.empty) {
+            const first = qShop.docs[0];
+            business = { id: first.id, ...(first.data() as Record<string, any>) };
+          } else {
+            // C. Query by stored id field
+            const qId = await adminDb
+              .collection('businesses')
+              .where('id', '==', cleanId)
+              .limit(1)
+              .get();
+            if (!qId.empty) {
+              const first = qId.docs[0];
+              business = { id: first.id, ...(first.data() as Record<string, any>) };
+            }
           }
-        } catch (e: any) {
-          console.warn('[Business Admin Query Warning]', e.message);
         }
+      } catch (adminErr) {
+        console.warn('[Business Detail GET] Admin SDK read warning, falling back to REST:', adminErr);
+      }
+    }
 
-        try {
-          const qDoctors = query(
-            collection(clientDb, 'users'),
-            where('role', '==', 'doctor')
-          );
-          const doctorsSnap = await getDocs(qDoctors);
-          const queryDoctors = doctorsSnap.docs
-            .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
-            .filter(
-              (u: any) =>
-                u.businessId === id ||
-                (business.shopId && u.shopId === business.shopId)
-            );
+    // Layer 2: Direct Firestore REST API (fast, reliable in serverless)
+    if (!business) {
+      try {
+        const { fetchFirestoreDocRest, queryFirestoreByFieldRest } = await import('@/lib/firebaseAdmin');
+        business = await fetchFirestoreDocRest('businesses', cleanId);
+        if (!business) {
+          business = await queryFirestoreByFieldRest('businesses', 'shopId', cleanId);
+        }
+        if (!business) {
+          business = await queryFirestoreByFieldRest('businesses', 'id', cleanId);
+        }
+      } catch (restErr) {
+        console.warn('[Business Detail GET] REST fetch warning, falling back to clientDb:', restErr);
+      }
+    }
 
-          if (queryDoctors.length > 0) {
-            const docMap = new Map();
-            doctors.forEach((d: any) => docMap.set(d.uid || d.email, d));
-            queryDoctors.forEach((d: any) => docMap.set(d.uid || d.email, { ...docMap.get(d.uid || d.email), ...d }));
-            doctors = Array.from(docMap.values());
+    // Layer 3: Client Firestore SDK in Node fallback
+    if (!business) {
+      try {
+        const clientDb = await getServerAuthenticatedDb();
+        const docSnap = await getDoc(doc(clientDb, 'businesses', cleanId));
+        if (docSnap.exists()) {
+          business = { id: docSnap.id, ...(docSnap.data() as Record<string, any>) };
+        } else {
+          const qShop = query(collection(clientDb, 'businesses'), where('shopId', '==', cleanId));
+          const shopSnap = await getDocs(qShop);
+          if (!shopSnap.empty) {
+            const first = shopSnap.docs[0];
+            business = { id: first.id, ...(first.data() as Record<string, any>) };
           }
-        } catch (e: any) {
-          console.warn('[Business Doctor Query Warning]', e.message);
         }
+      } catch (clientErr) {
+        console.warn('[Business Detail GET] Client SDK fetch warning:', clientErr);
       }
     }
 
     if (!business) {
       return NextResponse.json(
-        { success: false, error: 'Business not found.' },
+        { success: false, error: `Business with identifier "${cleanId}" was not found.` },
         { status: 404 }
       );
+    }
+
+    // Retrieve and aggregate assigned admins
+    if (Array.isArray(business.assignedAdmins) && business.assignedAdmins.length > 0) {
+      admins = [...business.assignedAdmins];
+    }
+
+    if (Array.isArray(business.assignedDoctors) && business.assignedDoctors.length > 0) {
+      doctors = [...business.assignedDoctors];
+    }
+
+    const canonicalDocId = business.id || cleanId;
+    const canonicalShopId = business.shopId || '';
+
+    if (hasServiceAccount() && adminDb) {
+      try {
+        const adminsSnap = await adminDb
+          .collection('users')
+          .where('role', '==', 'admin')
+          .get();
+
+        const queryAdmins = adminsSnap.docs
+          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
+          .filter(
+            (u: any) =>
+              u.businessId === canonicalDocId ||
+              u.businessId === cleanId ||
+              (canonicalShopId && u.shopId === canonicalShopId)
+          );
+
+        if (queryAdmins.length > 0) {
+          const adminMap = new Map();
+          admins.forEach((a: any) => adminMap.set(a.uid || a.email, a));
+          queryAdmins.forEach((a: any) =>
+            adminMap.set(a.uid || a.email, { ...adminMap.get(a.uid || a.email), ...a })
+          );
+          admins = Array.from(adminMap.values());
+        }
+
+        const doctorsSnap = await adminDb
+          .collection('users')
+          .where('role', '==', 'doctor')
+          .get();
+
+        const queryDoctors = doctorsSnap.docs
+          .map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }))
+          .filter(
+            (u: any) =>
+              u.businessId === canonicalDocId ||
+              u.businessId === cleanId ||
+              (canonicalShopId && u.shopId === canonicalShopId)
+          );
+
+        if (queryDoctors.length > 0) {
+          const docMap = new Map();
+          doctors.forEach((d: any) => docMap.set(d.uid || d.email, d));
+          queryDoctors.forEach((d: any) =>
+            docMap.set(d.uid || d.email, { ...docMap.get(d.uid || d.email), ...d })
+          );
+          doctors = Array.from(docMap.values());
+        }
+      } catch (queryErr) {
+        console.warn('[Business Users Query Warning]', queryErr);
+      }
     }
 
     return NextResponse.json({
@@ -140,7 +184,7 @@ export async function GET(
   } catch (error: any) {
     console.error('[Business Detail GET Error]', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to fetch business details.' },
+      { success: false, error: error?.message || 'Failed to fetch business details.' },
       { status: 500 }
     );
   }
@@ -210,18 +254,28 @@ export async function PUT(
       delete body.shopId;
     }
 
+    let targetDocId = id.trim();
+    if (hasServiceAccount() && adminDb) {
+      const checkSnap = await adminDb.collection('businesses').doc(targetDocId).get();
+      if (!checkSnap.exists) {
+        const qShop = await adminDb.collection('businesses').where('shopId', '==', targetDocId).limit(1).get();
+        if (!qShop.empty) targetDocId = qShop.docs[0].id;
+      }
+    }
+
     try {
       if (hasServiceAccount() && adminDb) {
-        await adminDb.collection('businesses').doc(id).update(updateData);
+        await adminDb.collection('businesses').doc(targetDocId).update(updateData);
       } else {
         const clientDb = await getServerAuthenticatedDb();
-        await updateDoc(doc(clientDb, 'businesses', id), updateData);
+        await updateDoc(doc(clientDb, 'businesses', targetDocId), updateData);
       }
     } catch (dbUpdateErr: any) {
       console.warn(`[Business PUT Server Warning]`, dbUpdateErr.message);
       return NextResponse.json({
         success: true,
         needsClientUpdate: true,
+        targetDocId,
         updatedFields: updateData,
         message: 'Updating business profile...',
       });
@@ -235,7 +289,7 @@ export async function PUT(
   } catch (error: any) {
     console.error('[Business PUT Error]', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to update business profile.' },
+      { success: false, error: error?.message || 'Failed to update business profile.' },
       { status: 500 }
     );
   }
@@ -259,15 +313,24 @@ export async function DELETE(
       );
     }
 
+    let targetDocId = id.trim();
+    if (hasServiceAccount() && adminDb) {
+      const checkSnap = await adminDb.collection('businesses').doc(targetDocId).get();
+      if (!checkSnap.exists) {
+        const qShop = await adminDb.collection('businesses').where('shopId', '==', targetDocId).limit(1).get();
+        if (!qShop.empty) targetDocId = qShop.docs[0].id;
+      }
+    }
+
     // Set status to inactive
     if (hasServiceAccount() && adminDb) {
-      await adminDb.collection('businesses').doc(id).update({
+      await adminDb.collection('businesses').doc(targetDocId).update({
         status: 'inactive',
         updatedAt: new Date().toISOString(),
       });
     } else {
       const clientDb = await getServerAuthenticatedDb();
-      await updateDoc(doc(clientDb, 'businesses', id), {
+      await updateDoc(doc(clientDb, 'businesses', targetDocId), {
         status: 'inactive',
         updatedAt: new Date().toISOString(),
       });
@@ -280,7 +343,7 @@ export async function DELETE(
   } catch (error: any) {
     console.error('[Business DELETE Error]', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to deactivate business.' },
+      { success: false, error: error?.message || 'Failed to deactivate business.' },
       { status: 500 }
     );
   }

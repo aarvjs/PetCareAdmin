@@ -25,6 +25,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function AdminsListPage() {
   const [admins, setAdmins] = useState<UserProfile[]>([]);
@@ -43,15 +44,14 @@ export default function AdminsListPage() {
     setIsLoading(true);
     try {
       // 1. Fetch via authenticated server-side API route (bypasses client Firestore rule restrictions)
-      const res = await fetch('/api/super-admin/users?role=admin');
-      const data = await res.json();
-      if (data.success && Array.isArray(data.users)) {
-        setAdmins(data.users);
-        setFilteredAdmins(data.users);
+      const res = await safeFetchJson<{ success: boolean; users: UserProfile[] }>('/api/super-admin/users?role=admin');
+      if (res.ok && res.data?.success && Array.isArray(res.data.users)) {
+        setAdmins(res.data.users);
+        setFilteredAdmins(res.data.users);
         return;
       }
 
-      // 2. Fallback to client query if server API returns error
+      // 2. Fallback to client query if server API returns error or empty
       const q = query(collection(db, 'users'), where('role', '==', 'admin'));
       const snap = await getDocs(q);
       const list: UserProfile[] = [];
@@ -102,7 +102,7 @@ export default function AdminsListPage() {
     const newStatus = actionType === 'activate' ? 'active' : 'inactive';
 
     try {
-      const res = await fetch('/api/super-admin/users', {
+      const res = await safeFetchJson<{ success: boolean; error?: string }>('/api/super-admin/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -111,8 +111,7 @@ export default function AdminsListPage() {
         }),
       });
 
-      const data = await res.json();
-      if (data.success) {
+      if (res.ok && res.data?.success) {
         setToastMessage(`Admin account ${selectedAdmin.fullName} is now ${newStatus}.`);
         await logActivity({
           actorUid: 'super-admin',

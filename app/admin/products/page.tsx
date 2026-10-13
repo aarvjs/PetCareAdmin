@@ -11,6 +11,7 @@ import { ImageUploader, ImageAsset } from '@/components/ui/ImageUploader';
 import { useAuth } from '@/lib/authContext';
 import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { safeFetchJson } from '@/lib/safeFetch';
 import {
   Plus,
   Search,
@@ -105,9 +106,8 @@ export default function AdminProductsPage() {
     setFetchError('');
     try {
       const shopParam = profile?.role === 'admin' && profile.shopId ? `&shopId=${encodeURIComponent(profile.shopId)}` : '';
-      const res = await fetch(`/api/products?forAdmin=true${shopParam}`);
-      const data = await res.json();
-      if (data.success && Array.isArray(data.products)) {
+      const { data } = await safeFetchJson<{ success: boolean; products?: any[]; error?: string }>(`/api/products?forAdmin=true${shopParam}`);
+      if (data && data.success && Array.isArray(data.products)) {
         const scoped = profile?.role === 'admin' && (profile.shopId || profile.businessId)
           ? data.products.filter((p: any) => 
               (profile.shopId && p.shopId === profile.shopId) ||
@@ -116,7 +116,7 @@ export default function AdminProductsPage() {
           : data.products;
         setProducts(scoped);
       } else {
-        setFetchError(data.error || 'Failed to fetch products from server API.');
+        setFetchError(data?.error || 'Failed to fetch products from server API.');
       }
     } catch (err: any) {
       console.warn('Could not fetch products from server API:', err);
@@ -194,7 +194,7 @@ export default function AdminProductsPage() {
 
     try {
       const idToken = user ? await user.getIdToken() : '';
-      const res = await fetch(`/api/products/${productId}`, {
+      const { ok, data } = await safeFetchJson<any>(`/api/products/${productId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -203,9 +203,7 @@ export default function AdminProductsPage() {
         body: JSON.stringify({ isPublished: newStatus }),
       });
 
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
+      if (!ok || !data?.success) {
         // Fall back to direct Firestore update with active Admin session
         await updateDoc(doc(db, 'products', productId), {
           isPublished: newStatus,
@@ -469,7 +467,7 @@ export default function AdminProductsPage() {
       const url = selectedProduct ? `/api/products/${selectedProduct.id}` : '/api/products';
       const method = selectedProduct ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const { ok, data } = await safeFetchJson<any>(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -478,9 +476,7 @@ export default function AdminProductsPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-
-      if (res.ok && data.success) {
+      if (ok && data?.success) {
         setFormSuccess(data.message || 'Product saved successfully!');
         fetchProducts();
         setTimeout(() => setIsFormOpen(false), 1000);
@@ -559,11 +555,10 @@ export default function AdminProductsPage() {
   const handleDeleteConfirm = async () => {
     if (!selectedProduct) return;
     try {
-      const res = await fetch(`/api/products/${selectedProduct.id}`, {
+      const { ok, data } = await safeFetchJson<any>(`/api/products/${selectedProduct.id}`, {
         method: 'DELETE',
       });
-      const data = await res.json();
-      if (data.success) {
+      if (ok && data?.success) {
         fetchProducts();
       }
     } catch (e) {

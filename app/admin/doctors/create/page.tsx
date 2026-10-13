@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { validateEmail, validateIndianMobile, validatePassword } from '@/lib/validation';
 import { useAuth } from '@/lib/authContext';
+import { safeFetchJson } from '@/lib/safeFetch';
 import {
   Stethoscope,
   ArrowLeft,
@@ -133,7 +134,7 @@ export default function AdminCreateDoctorPage() {
 
     try {
       const idToken = user ? await user.getIdToken() : '';
-      const res = await fetch('/api/admin/doctors', {
+      const { ok, data, errorText } = await safeFetchJson<any>('/api/admin/doctors', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -155,10 +156,8 @@ export default function AdminCreateDoctorPage() {
         }),
       });
 
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        setApiError(data.error || 'Failed to create Doctor account.');
+      if (!ok || !data?.success) {
+        setApiError(data?.error || errorText || 'Failed to create Doctor account.');
         setIsLoading(false);
         return;
       }

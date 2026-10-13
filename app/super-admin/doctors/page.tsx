@@ -19,6 +19,7 @@ import {
   Award,
 } from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function DoctorsListPage() {
   const [doctors, setDoctors] = useState<UserProfile[]>([]);
@@ -36,11 +37,10 @@ export default function DoctorsListPage() {
     setIsLoading(true);
     try {
       // 1. Fetch via authenticated server-side API route
-      const res = await fetch('/api/super-admin/users?role=doctor');
-      const data = await res.json();
-      if (data.success && Array.isArray(data.users)) {
-        setDoctors(data.users);
-        setFilteredDoctors(data.users);
+      const res = await safeFetchJson<{ success: boolean; users: UserProfile[] }>('/api/super-admin/users?role=doctor');
+      if (res.ok && res.data?.success && Array.isArray(res.data.users)) {
+        setDoctors(res.data.users);
+        setFilteredDoctors(res.data.users);
         return;
       }
 
@@ -92,7 +92,7 @@ export default function DoctorsListPage() {
     const newStatus = actionType === 'activate' ? 'active' : 'inactive';
 
     try {
-      const res = await fetch('/api/super-admin/users', {
+      const res = await safeFetchJson<{ success: boolean; error?: string }>('/api/super-admin/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -101,8 +101,7 @@ export default function DoctorsListPage() {
         }),
       });
 
-      const data = await res.json();
-      if (data.success) {
+      if (res.ok && res.data?.success) {
         setToastMessage(`Doctor account ${selectedDoctor.fullName} is now ${newStatus}.`);
         await logActivity({
           actorUid: 'super-admin',

@@ -33,29 +33,49 @@ export async function getServerAuthenticatedDb() {
   return getClientFirestore(app);
 }
 
+let isServiceAccountInitialized = false;
+
 /**
  * Singleton Firebase Admin App initialization.
+ * Handles multiline private keys, quotes, and whitespace safely for Vercel and local environments.
  */
 function getAdminApp(): App | null {
   if (getAdminApps().length > 0) {
     return getAdminApps()[0]!;
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'pet-clinic-47727';
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined;
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    'pet-clinic-47727';
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+  const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
 
-  if (clientEmail && privateKey) {
+  if (clientEmail && rawPrivateKey) {
     try {
-      return initAdminApp({
+      let privateKey = rawPrivateKey.trim();
+      // Strip surrounding quotes if pasted with quotes into Vercel environment variables
+      if (
+        (privateKey.startsWith('"') && privateKey.endsWith('"')) ||
+        (privateKey.startsWith("'") && privateKey.endsWith("'"))
+      ) {
+        privateKey = privateKey.slice(1, -1);
+      }
+      // Normalize escaped newlines and carriage returns
+      privateKey = privateKey.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+
+      const app = initAdminApp({
         credential: cert({
           projectId,
           clientEmail,
           privateKey,
         }),
       });
+      isServiceAccountInitialized = true;
+      return app;
     } catch (e) {
       console.warn('[Firebase Admin] cert init warning:', e);
+      isServiceAccountInitialized = false;
     }
   }
 
@@ -71,9 +91,143 @@ const adminApp = getAdminApp();
 export const adminAuth: Auth | null = adminApp ? getAdminAuth(adminApp) : null;
 export const adminDb: Firestore | null = adminApp ? getAdminDb(adminApp) : null;
 
-// Check if Admin SDK has service account keys configured
+// Check if Admin SDK has valid service account keys successfully configured
 export function hasServiceAccount(): boolean {
-  return !!(process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
+  return isServiceAccountInitialized;
+}
+
+// ---------- FIRESTORE REST API HELPERS FOR SERVERLESS RUNTIMES ----------
+
+export function decodeFirestoreValue(val: any): any {
+  if (!val || typeof val !== 'object') return val;
+  if ('stringValue' in val) return val.stringValue;
+  if ('integerValue' in val) return parseInt(val.integerValue, 10);
+  if ('doubleValue' in val) return parseFloat(val.doubleValue);
+  if ('booleanValue' in val) return val.booleanValue;
+  if ('timestampValue' in val) return val.timestampValue;
+  if ('nullValue' in val) return null;
+  if ('arrayValue' in val) {
+    const list = val.arrayValue?.values || [];
+    return list.map(decodeFirestoreValue);
+  }
+  if ('mapValue' in val) {
+    const fields = val.mapValue?.fields || {};
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      res[k] = decodeFirestoreValue(v);
+    }
+    return res;
+  }
+  return val;
+}
+
+export function decodeFirestoreDoc(doc: any): any {
+  if (!doc) return null;
+  const nameParts = (doc.name || '').split('/');
+  const docId = nameParts[nameParts.length - 1] || '';
+  const fields = doc.fields || {};
+  const res: Record<string, any> = { id: docId };
+  for (const [k, v] of Object.entries(fields)) {
+    res[k] = decodeFirestoreValue(v);
+  }
+  return res;
+}
+
+export async function fetchFirestoreCollectionRest(collectionName: string): Promise<any[]> {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    'pet-clinic-47727';
+  const apiKey =
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+    'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}?key=${apiKey}`;
+
+  const res = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    throw new Error(`Firestore REST error: ${res.status} ${res.statusText}`);
+  }
+
+  const json = await res.json();
+  const docs = json.documents || [];
+  return docs.map(decodeFirestoreDoc).filter(Boolean);
+}
+
+export async function fetchFirestoreDocRest(collectionName: string, docId: string): Promise<any | null> {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    'pet-clinic-47727';
+  const apiKey =
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+    'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${encodeURIComponent(docId)}?key=${apiKey}`;
+
+  const res = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Firestore REST error: ${res.status} ${res.statusText}`);
+  }
+
+  const json = await res.json();
+  return decodeFirestoreDoc(json);
+}
+
+export async function queryFirestoreByFieldRest(
+  collectionName: string,
+  fieldPath: string,
+  value: string
+): Promise<any | null> {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    'pet-clinic-47727';
+  const apiKey =
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+    'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery?key=${apiKey}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: collectionName }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath },
+            op: 'EQUAL',
+            value: { stringValue: value },
+          },
+        },
+        limit: 1,
+      },
+    }),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const list = await res.json();
+  if (Array.isArray(list) && list.length > 0 && list[0].document) {
+    return decodeFirestoreDoc(list[0].document);
+  }
+  return null;
 }
 
 /**

@@ -8,6 +8,7 @@ import { UserProfile } from '@/lib/authContext';
 import { UserStatusBadge } from '@/components/super-admin/UserStatusBadge';
 import { ArrowLeft, Stethoscope, Mail, Phone, User, Save, CheckCircle2, AlertCircle, Award, Clock, FileText } from 'lucide-react';
 import { logActivity } from '@/lib/auditLogger';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function DoctorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
@@ -67,7 +68,7 @@ export default function DoctorDetailPage({ params }: { params: Promise<{ id: str
     setErrorMessage('');
 
     try {
-      const res = await fetch('/api/super-admin/users', {
+      const { ok, data, errorText } = await safeFetchJson<any>('/api/super-admin/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -83,9 +84,8 @@ export default function DoctorDetailPage({ params }: { params: Promise<{ id: str
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setErrorMessage(data.error || 'Failed to update doctor details.');
+      if (!ok || data?.error) {
+        setErrorMessage(data?.error || errorText || 'Failed to update doctor details.');
         setIsSaving(false);
         return;
       }

@@ -6,12 +6,14 @@ import { useRouter } from 'next/navigation';
 import {
   collection,
   getDocs,
+  getDoc,
   query,
   where,
   doc,
   updateDoc,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { safeFetchJson } from '@/lib/safeFetch';
 import {
   ArrowLeft,
   Building2,
@@ -112,31 +114,83 @@ export default function BusinessDetailPage({
     }
     setErrorMessage('');
 
-    try {
-      // 1. Fetch from server API route
-      const res = await fetch(`/api/super-admin/businesses/${businessId}`);
-      const data = await res.json();
+    const cleanBizId = businessId?.trim();
+    if (!cleanBizId) {
+      setErrorMessage('Invalid business ID.');
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
 
-      if (!res.ok || !data.success || !data.business) {
-        setErrorMessage(data.error || 'Failed to load business details.');
+    try {
+      let currentBiz: BusinessDetail | null = null;
+      let loadedAdmins: UserProfile[] = [];
+      let loadedDoctors: UserProfile[] = [];
+
+      // 1. Fetch from server API route
+      const res = await safeFetchJson<{
+        success: boolean;
+        business?: BusinessDetail;
+        admins?: UserProfile[];
+        doctors?: UserProfile[];
+        error?: string;
+      }>(`/api/super-admin/businesses/${encodeURIComponent(cleanBizId)}`);
+
+      if (res.ok && res.data?.success && res.data.business) {
+        currentBiz = res.data.business;
+        loadedAdmins = Array.isArray(res.data.admins) ? [...res.data.admins] : [];
+        loadedDoctors = Array.isArray(res.data.doctors) ? [...res.data.doctors] : [];
+      } else {
+        // 2. Resilient Client Firestore Fallback
+        // If API route returned an error or non-JSON response on serverless,
+        // look up the business directly in Firestore using client SDK.
+        try {
+          // A. Try direct document ID
+          const docRef = doc(db, 'businesses', cleanBizId);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            currentBiz = { id: docSnap.id, ...(docSnap.data() as any) };
+          } else {
+            // B. Query by permanent Shop ID (e.g. SHOP-D9E8)
+            const qShop = query(collection(db, 'businesses'), where('shopId', '==', cleanBizId));
+            const shopSnap = await getDocs(qShop);
+            if (!shopSnap.empty) {
+              const first = shopSnap.docs[0];
+              currentBiz = { id: first.id, ...(first.data() as any) };
+            } else {
+              // C. Query by stored id field
+              const qStoredId = query(collection(db, 'businesses'), where('id', '==', cleanBizId));
+              const storedIdSnap = await getDocs(qStoredId);
+              if (!storedIdSnap.empty) {
+                const first = storedIdSnap.docs[0];
+                currentBiz = { id: first.id, ...(first.data() as any) };
+              }
+            }
+          }
+        } catch (clientFallbackErr) {
+          console.warn('[Client Firestore Fallback Warning]', clientFallbackErr);
+        }
+      }
+
+      if (!currentBiz) {
+        setErrorMessage(
+          res.error || res.data?.error || `Business with identifier "${cleanBizId}" does not exist in the registry.`
+        );
+        setBusiness(null);
         setIsLoading(false);
         setIsRefreshing(false);
         return;
       }
 
-      const currentBiz: BusinessDetail = data.business;
       setBusiness(currentBiz);
+      setErrorMessage('');
 
       // Multi-layer admin retrieval:
-      let loadedAdmins: UserProfile[] = Array.isArray(data.admins) ? [...data.admins] : [];
-
-      // Layer 1: Check business.assignedAdmins
       if (loadedAdmins.length === 0 && Array.isArray(currentBiz.assignedAdmins) && currentBiz.assignedAdmins.length > 0) {
         loadedAdmins = [...currentBiz.assignedAdmins];
       }
 
-      // Layer 2: Authenticated client-side Firestore query
-      // The logged-in Super Admin has read permissions on users
+      // Query client Firestore users for admins
       try {
         const qAdmins = query(collection(db, 'users'), where('role', '==', 'admin'));
         const snap = await getDocs(qAdmins);
@@ -147,8 +201,9 @@ export default function BusinessDetailPage({
           const u = { ...(docSnap.data() as UserProfile), uid: docSnap.id };
           allAdminsList.push(u);
           if (
-            u.businessId === businessId ||
-            (currentBiz.shopId && u.shopId === currentBiz.shopId)
+            u.businessId === currentBiz!.id ||
+            u.businessId === cleanBizId ||
+            (currentBiz!.shopId && u.shopId === currentBiz!.shopId)
           ) {
             clientMatchingAdmins.push(u);
           }
@@ -171,19 +226,19 @@ export default function BusinessDetailPage({
           });
           loadedAdmins = Array.from(map.values());
 
-          // Automatically sync all matched admins into business document
+          // Sync matched admins into business document
           const simplifiedAdmins = loadedAdmins.map((a) => ({
             uid: a.uid || '',
             fullName: a.fullName || (a as any).name || 'Admin',
             email: a.email || '',
             phone: a.phone || '',
             modules: a.modules || ['ecommerce', 'clinic'],
-            shopId: currentBiz.shopId || a.shopId || '',
+            shopId: currentBiz!.shopId || a.shopId || '',
             status: a.status || 'active',
             assignedAt: (a as any).assignedAt || a.createdAt || new Date().toISOString(),
           }));
 
-          updateDoc(doc(db, 'businesses', businessId), {
+          updateDoc(doc(db, 'businesses', currentBiz.id), {
             assignedAdmins: simplifiedAdmins,
             adminCount: simplifiedAdmins.length,
             updatedAt: new Date().toISOString(),
@@ -195,8 +250,7 @@ export default function BusinessDetailPage({
 
       setAdmins(loadedAdmins);
 
-      // Layer 3: Doctor retrieval
-      let loadedDoctors: UserProfile[] = Array.isArray(data.doctors) ? [...data.doctors] : [];
+      // Multi-layer doctor retrieval:
       if (loadedDoctors.length === 0 && Array.isArray(currentBiz.assignedDoctors) && currentBiz.assignedDoctors.length > 0) {
         loadedDoctors = [...currentBiz.assignedDoctors];
       }
@@ -208,8 +262,9 @@ export default function BusinessDetailPage({
         docSnap.forEach((d) => {
           const docData = { ...(d.data() as UserProfile), uid: d.id };
           if (
-            docData.businessId === businessId ||
-            (currentBiz.shopId && docData.shopId === currentBiz.shopId)
+            docData.businessId === currentBiz!.id ||
+            docData.businessId === cleanBizId ||
+            (currentBiz!.shopId && docData.shopId === currentBiz!.shopId)
           ) {
             clientMatchingDocs.push(docData);
           }
@@ -399,7 +454,7 @@ export default function BusinessDetailPage({
     setIsSavingModules(true);
 
     try {
-      const res = await fetch('/api/super-admin/users', {
+      const res = await safeFetchJson<{ success: boolean; error?: string }>('/api/super-admin/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -409,17 +464,17 @@ export default function BusinessDetailPage({
         }),
       });
 
-      const data = await res.json();
+      const data = res.data;
 
-      if (!res.ok || !data.success) {
-        setModuleModalError(data.error || 'Failed to update modules.');
+      if (!res.ok || !data?.success) {
+        setModuleModalError(res.error || data?.error || 'Failed to update modules.');
         setIsSavingModules(false);
         return;
       }
 
       setSuccessMessage(`Permissions updated for ${editingAdmin.fullName}!`);
       setEditingAdmin(null);
-      await fetchBusinessData();
+      await fetchBusinessData(true);
       setTimeout(() => setSuccessMessage(''), 3500);
     } catch (err: any) {
       setModuleModalError(err.message || 'Network error saving modules.');
@@ -438,16 +493,26 @@ export default function BusinessDetailPage({
 
   if (!business) {
     return (
-      <div className="bg-white border border-[#E8ECF0] rounded-2xl p-8 text-center space-y-4">
-        <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+      <div className="bg-white border border-[#E8ECF0] rounded-2xl p-8 text-center space-y-4 max-w-lg mx-auto">
+        <AlertCircle className="w-10 h-10 text-amber-500 mx-auto" />
         <h2 className="text-base font-extrabold text-[#25242A]">Business Not Found</h2>
-        <p className="text-xs text-[#777980]">{errorMessage || 'The requested business record does not exist.'}</p>
-        <Link
-          href="/super-admin/businesses"
-          className="text-xs font-bold text-[#7567E8] hover:underline inline-block mt-2"
-        >
-          Return to Businesses Directory
-        </Link>
+        <p className="text-xs text-[#777980] leading-relaxed">
+          {errorMessage || `The requested business record ("${businessId}") could not be located in the database.`}
+        </p>
+        <div className="flex items-center justify-center gap-3 pt-2">
+          <button
+            onClick={() => fetchBusinessData()}
+            className="px-4 py-2 bg-[#7567E8] text-white rounded-xl text-xs font-bold hover:bg-[#6253db] transition-all flex items-center gap-1.5 shadow-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Retry Loading
+          </button>
+          <Link
+            href="/super-admin/businesses"
+            className="px-4 py-2 bg-slate-100 text-[#25242A] rounded-xl text-xs font-bold hover:bg-slate-200 transition-all"
+          >
+            Return to Businesses Directory
+          </Link>
+        </div>
       </div>
     );
   }

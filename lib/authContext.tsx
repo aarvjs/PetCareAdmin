@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { safeFetchJson } from './safeFetch';
 
 export interface UserProfile {
   uid: string;
@@ -152,13 +153,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Fetch by server API route (handles verified server permissions)
       if (!bData) {
         try {
-          const res = await fetch(
+          const { data } = await safeFetchJson<any>(
             `/api/admin/business?businessId=${encodeURIComponent(bId || '')}&shopId=${encodeURIComponent(sId || '')}&uid=${encodeURIComponent(adminProfile.uid || '')}`
           );
-          const data = await res.json();
-          if (data.success && data.business) {
+          if (data?.success && data?.business) {
             bData = data.business as BusinessDetails;
-          } else if (data.error) {
+          } else if (data?.error) {
             setBusinessError(data.error);
           }
         } catch (apiErr) {

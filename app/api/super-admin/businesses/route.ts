@@ -46,6 +46,8 @@ async function generateUniqueShopId(): Promise<string> {
   return `SHOP-${Date.now().toString(36).toUpperCase().slice(-4)}${Math.random().toString(36).toUpperCase().slice(-3)}`;
 }
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -54,13 +56,35 @@ export async function GET(request: Request) {
 
     let businesses: any[] = [];
 
+    // Layer 1: Admin SDK if service account is active
     if (hasServiceAccount() && adminDb) {
-      const snap = await adminDb.collection('businesses').get();
-      businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    } else {
-      const clientDb = await getServerAuthenticatedDb();
-      const snap = await getDocs(collection(clientDb, 'businesses'));
-      businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      try {
+        const snap = await adminDb.collection('businesses').get();
+        businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      } catch (adminErr) {
+        console.warn('[Businesses GET] Admin SDK read warning, falling back to REST:', adminErr);
+      }
+    }
+
+    // Layer 2: Direct Firestore REST API (fast, serverless-native, non-blocking)
+    if (businesses.length === 0) {
+      try {
+        const { fetchFirestoreCollectionRest } = await import('@/lib/firebaseAdmin');
+        businesses = await fetchFirestoreCollectionRest('businesses');
+      } catch (restErr) {
+        console.warn('[Businesses GET] REST fetch warning, falling back to clientDb:', restErr);
+      }
+    }
+
+    // Layer 3: Client Firestore SDK in Node fallback
+    if (businesses.length === 0) {
+      try {
+        const clientDb = await getServerAuthenticatedDb();
+        const snap = await getDocs(collection(clientDb, 'businesses'));
+        businesses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      } catch (clientErr) {
+        console.warn('[Businesses GET] Client SDK fetch warning:', clientErr);
+      }
     }
 
     // Filter by search query
@@ -90,7 +114,7 @@ export async function GET(request: Request) {
   } catch (error: any) {
     console.error('[Businesses GET Error]', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to fetch businesses.' },
+      { success: false, error: error?.message || 'Failed to fetch businesses.' },
       { status: 500 }
     );
   }

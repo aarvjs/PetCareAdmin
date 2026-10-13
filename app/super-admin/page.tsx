@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { UserProfile } from '@/lib/authContext';
+import { safeFetchJson } from '@/lib/safeFetch';
 import { StatCard } from '@/components/super-admin/StatCard';
 import { UserStatusBadge } from '@/components/super-admin/UserStatusBadge';
 import { EmptyState } from '@/components/super-admin/EmptyState';
@@ -91,9 +92,8 @@ export default function SuperAdminDashboardPage() {
       try {
         let loadedUsers = false;
         try {
-          const res = await fetch('/api/super-admin/users');
-          const data = await res.json();
-          if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+          const { data } = await safeFetchJson<{ success: boolean; users?: UserProfile[] }>('/api/super-admin/users');
+          if (data && data.success && Array.isArray(data.users) && data.users.length > 0) {
             setUsersList(data.users);
             loadedUsers = true;
           }

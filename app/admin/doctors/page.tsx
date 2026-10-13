@@ -12,6 +12,7 @@ import { Plus, Stethoscope, Mail, Phone, Award, Calendar, Edit, Power, ShieldAle
 import { useAuth } from '@/lib/authContext';
 import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export interface DoctorRecord {
   id: string;
@@ -52,10 +53,9 @@ export default function AdminDoctorsPage() {
       // 1. Try querying via API with Admin's shopId / businessId
       const targetShopId = profile?.shopId || '';
       const url = targetShopId ? `/api/admin/doctors?shopId=${encodeURIComponent(targetShopId)}` : '/api/admin/doctors';
-      const res = await fetch(url);
-      const data = await res.json();
+      const { data } = await safeFetchJson<{ success: boolean; doctors?: any[] }>(url);
 
-      if (data.success && Array.isArray(data.doctors)) {
+      if (data && data.success && Array.isArray(data.doctors)) {
         const formatted = data.doctors.map((d: any) => ({
           id: d.uid || d.id,
           uid: d.uid || d.id,
