@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { isRequestAuthorizedAsProductAdmin, adminDb, hasServiceAccount, getSharedClientFirestore } from '@/lib/firebaseAdmin';
 
+export const dynamic = 'force-dynamic';
+
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {

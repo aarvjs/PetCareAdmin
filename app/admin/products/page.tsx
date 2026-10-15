@@ -511,6 +511,7 @@ export default function AdminProductsPage() {
         currency: 'INR',
         stockQuantity: parseInt(formData.stockQuantity) || 0,
         stock: parseInt(formData.stockQuantity) || 0,
+        status: (parseInt(formData.stockQuantity) || 0) <= 0 ? 'Out of Stock' : (parseInt(formData.stockQuantity) || 0) <= (parseInt(formData.lowStockThreshold) || 5) ? 'Low Stock' : 'In Stock',
         lowStockThreshold: parseInt(formData.lowStockThreshold) || 5,
         allowBackorders: !!formData.allowBackorders,
         images: formData.images,

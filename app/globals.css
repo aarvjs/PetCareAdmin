@@ -44,3 +44,27 @@ html, body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94A3B8;
 }
+
+/* Dedicated Print Styles for Order Invoices */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #invoice-printable-container, #invoice-printable-container * {
+    visibility: visible;
+  }
+  #invoice-printable-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+}

@@ -79,11 +79,10 @@ function getAdminApp(): App | null {
     }
   }
 
-  try {
-    return initAdminApp({ projectId });
-  } catch (e) {
-    return null;
-  }
+  // Do NOT initialize an unauthenticated adminApp without credentials.
+  // In serverless environments (Vercel), an app without credentials attempts GCP metadata lookups
+  // that fail and throw unhandled gRPC rejection errors, crashing the process with HTTP 500.
+  return null;
 }
 
 const adminApp = getAdminApp();
@@ -131,6 +130,38 @@ export function decodeFirestoreDoc(doc: any): any {
     res[k] = decodeFirestoreValue(v);
   }
   return res;
+}
+
+export function encodeFirestoreValue(val: any): any {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'string') return { stringValue: val };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val) ? { integerValue: val.toString() } : { doubleValue: val };
+  }
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map(encodeFirestoreValue) } };
+  }
+  if (typeof val === 'object') {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) {
+        fields[k] = encodeFirestoreValue(v);
+      }
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+
+export function encodeFirestoreFields(obj: Record<string, any>): Record<string, any> {
+  const fields: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      fields[k] = encodeFirestoreValue(v);
+    }
+  }
+  return fields;
 }
 
 export async function fetchFirestoreCollectionRest(collectionName: string): Promise<any[]> {
@@ -312,16 +343,17 @@ export async function createServerUserProfile(params: {
     const secondaryAuth = getClientAuth(secondaryApp);
     const secondaryDb = getClientFirestore(secondaryApp);
 
+    let userCred: any = null;
     try {
-      const cred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
-      uid = cred.user.uid;
+      userCred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
+      uid = userCred.user.uid;
     } catch (err: any) {
       if (err.code === 'auth/email-already-in-use') {
         try {
-          const cred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
-          uid = cred.user.uid;
-          if (cred.user) {
-            await updatePassword(cred.user, userPassword);
+          userCred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
+          uid = userCred.user.uid;
+          if (userCred.user) {
+            await updatePassword(userCred.user, userPassword);
           }
         } catch (e) {
           throw new Error('This email address is already registered in Firebase Authentication.');
@@ -332,25 +364,51 @@ export async function createServerUserProfile(params: {
     }
 
     const now = new Date().toISOString();
-    await setDoc(
-      doc(secondaryDb, 'users', uid),
-      {
-        uid,
-        fullName,
-        email: cleanEmail,
-        phone: phone || '',
-        role,
-        status,
-        permissions,
-        shopId: shopId || '',
-        businessId: businessId || '',
-        modules: modules || [],
-        createdBy,
-        createdAt: now,
-        updatedAt: now,
-      },
-      { merge: true }
-    );
+    const userDocData = {
+      uid,
+      fullName,
+      email: cleanEmail,
+      phone: phone || '',
+      role,
+      status,
+      permissions,
+      shopId: shopId || '',
+      businessId: businessId || '',
+      modules: modules || [],
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // 1. Direct REST write using the created user's fresh ID token
+    try {
+      if (userCred && userCred.user) {
+        const idToken = await userCred.user.getIdToken();
+        const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+        const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'pet-clinic-47727';
+        const restUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${encodeURIComponent(uid)}?key=${apiKey}`;
+        await fetch(restUrl, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            fields: encodeFirestoreFields(userDocData),
+          }),
+        });
+      }
+    } catch (restErr: any) {
+      console.warn('[User Provisioning REST Write Notice]', restErr?.message);
+    }
+
+    // 2. Client SDK fallback with safety timeout (max 2 seconds)
+    try {
+      await Promise.race([
+        setDoc(doc(secondaryDb, 'users', uid), userDocData, { merge: true }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+      ]);
+    } catch (_) {}
   }
 
   return {

@@ -9,6 +9,8 @@ import {
 import { sendAdminInvitationEmail } from '@/lib/emailService';
 import { doc, updateDoc, arrayUnion, increment } from 'firebase/firestore';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(-4)}`;
 
@@ -128,12 +130,19 @@ export async function POST(request: Request) {
             { merge: true }
           );
         } else {
-          const clientDb = await getServerAuthenticatedDb();
-          await updateDoc(doc(clientDb, 'businesses', businessId), {
-            assignedAdmins: arrayUnion(adminEntry),
-            adminCount: increment(1),
-            updatedAt: new Date().toISOString(),
-          });
+          try {
+            const clientDb = await getServerAuthenticatedDb();
+            await Promise.race([
+              updateDoc(doc(clientDb, 'businesses', businessId), {
+                assignedAdmins: arrayUnion(adminEntry),
+                adminCount: increment(1),
+                updatedAt: new Date().toISOString(),
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+            ]);
+          } catch (syncErr: any) {
+            console.warn(`[Create Admin][${requestId}] Business doc update fallback notice:`, syncErr?.message);
+          }
         }
       } catch (bizUpdateErr: any) {
         console.warn(`[Create Admin][${requestId}] Business doc update warning:`, bizUpdateErr.message);

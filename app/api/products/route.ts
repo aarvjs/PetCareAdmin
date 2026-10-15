@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
 import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
-import { isRequestAuthorizedAsProductAdmin, adminDb, hasServiceAccount, getSharedClientFirestore } from '@/lib/firebaseAdmin';
+import {
+  isRequestAuthorizedAsProductAdmin,
+  adminDb,
+  hasServiceAccount,
+  getSharedClientFirestore,
+  fetchFirestoreCollectionRest,
+} from '@/lib/firebaseAdmin';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
@@ -18,11 +26,20 @@ export async function GET(request: Request) {
         const snapshot = await adminDb.collection('products').get();
         products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       } catch (e) {
-        console.warn('[Products GET] Admin SDK query failed, falling back to Client Web SDK:', e);
+        console.warn('[Products GET] Admin SDK query failed, falling back to REST:', e);
       }
     }
 
-    // 2. Client Web SDK fallback mode
+    // 2. Direct Firestore REST API (fast, serverless-native)
+    if (products.length === 0) {
+      try {
+        products = await fetchFirestoreCollectionRest('products');
+      } catch (restErr: any) {
+        console.warn('[Products GET] REST fetch notice:', restErr?.message);
+      }
+    }
+
+    // 3. Client Web SDK fallback mode
     if (products.length === 0) {
       try {
         const clientDb = getSharedClientFirestore();
