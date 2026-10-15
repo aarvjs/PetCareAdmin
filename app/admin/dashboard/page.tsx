@@ -63,6 +63,7 @@ interface RealProduct {
   isPublished?: boolean;
   shopId?: string;
   businessId?: string;
+  createdBy?: string;
   imageUrl?: string;
 }
 
@@ -87,7 +88,7 @@ interface RealAppointment {
 }
 
 export default function AdminDashboardPage() {
-  const { profile, business, loading: authLoading } = useAuth();
+  const { profile, business, user, loading: authLoading } = useAuth();
   const [copiedShopId, setCopiedShopId] = useState(false);
 
   // Real Database State
@@ -151,8 +152,9 @@ export default function AdminDashboardPage() {
   // Real-time Firestore Listeners strictly scoped to the Admin's business
   useEffect(() => {
     if (!profile) return;
-    const targetShopId = profile.shopId;
-    const targetBizId = profile.businessId;
+    const targetShopId = profile.shopId || business?.shopId || '';
+    const targetBizId = profile.businessId || business?.id || '';
+    const currentUid = profile.uid || user?.uid || '';
 
     setDataError(null);
     let unsubOrders = () => {};
@@ -173,12 +175,13 @@ export default function AdminDashboardPage() {
               ...(d.data() as any),
             }));
 
-            // Strict Business Scoping
-            if (profile.role === 'admin' && (targetShopId || targetBizId)) {
+            // Strict Business Scoping with Legacy Support
+            if (profile.role === 'admin') {
               list = list.filter((ord) => {
-                const matchShop = targetShopId && ord.shopId === targetShopId;
-                const matchBiz = targetBizId && ord.businessId === targetBizId;
-                return matchShop || matchBiz;
+                const matchShop = targetShopId && ord.shopId && ord.shopId.toUpperCase() === targetShopId.toUpperCase();
+                const matchBiz = targetBizId && ord.businessId && ord.businessId === targetBizId;
+                const matchUnassigned = (!ord.shopId && !ord.businessId);
+                return Boolean(matchShop || matchBiz || matchUnassigned);
               });
             }
 
@@ -236,12 +239,14 @@ export default function AdminDashboardPage() {
               } as RealProduct;
             });
 
-            // Strict Business Scoping
-            if (profile.role === 'admin' && (targetShopId || targetBizId)) {
+            // Strict Business Scoping with Creator & Legacy Fallback
+            if (profile.role === 'admin') {
               list = list.filter((p) => {
-                const matchShop = targetShopId && p.shopId === targetShopId;
-                const matchBiz = targetBizId && p.businessId === targetBizId;
-                return matchShop || matchBiz;
+                const matchCreator = currentUid && p.createdBy && p.createdBy.toLowerCase() === currentUid.toLowerCase();
+                const matchShop = targetShopId && p.shopId && p.shopId.toUpperCase() === targetShopId.toUpperCase();
+                const matchBiz = targetBizId && p.businessId && p.businessId === targetBizId;
+                const matchUnassigned = (!p.shopId && !p.businessId);
+                return Boolean(matchCreator || matchShop || matchBiz || matchUnassigned);
               });
             }
 

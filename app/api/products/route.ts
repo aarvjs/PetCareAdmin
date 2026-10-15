@@ -51,6 +51,8 @@ export async function GET(request: Request) {
     }
 
     const shopId = searchParams.get('shopId');
+    const uid = searchParams.get('uid');
+    const businessId = searchParams.get('businessId');
 
     if (category && category !== 'All') {
       products = products.filter((p: any) => p.category === category);
@@ -58,8 +60,18 @@ export async function GET(request: Request) {
     if (petType && petType !== 'All') {
       products = products.filter((p: any) => p.petType === petType || p.suitableAnimal === petType);
     }
-    if (shopId && shopId !== 'All') {
-      products = products.filter((p: any) => p.shopId === shopId || p.businessId === shopId);
+    if (forAdmin) {
+      if (shopId || businessId || uid) {
+        products = products.filter((p: any) => {
+          const matchCreator = uid && p.createdBy && p.createdBy.toLowerCase() === uid.toLowerCase();
+          const matchShop = shopId && p.shopId && p.shopId.toUpperCase() === shopId.toUpperCase();
+          const matchBiz = (businessId && p.businessId === businessId) || (shopId && p.businessId === shopId);
+          const matchUnassigned = (!p.shopId && !p.businessId);
+          return Boolean(matchCreator || matchShop || matchBiz || matchUnassigned);
+        });
+      }
+    } else if (shopId && shopId !== 'All') {
+      products = products.filter((p: any) => p.shopId === shopId || p.businessId === shopId || (!p.shopId && !p.businessId));
     }
     if (status && status !== 'All') {
       if (status === 'Published' || status === 'Active') {

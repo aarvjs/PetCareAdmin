@@ -37,7 +37,7 @@ interface ProductVariant {
 }
 
 export default function AdminProductsPage() {
-  const { profile, user } = useAuth();
+  const { profile, business, user } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,14 +105,21 @@ export default function AdminProductsPage() {
     setIsLoadingProducts(true);
     setFetchError('');
     try {
-      const shopParam = profile?.role === 'admin' && profile.shopId ? `&shopId=${encodeURIComponent(profile.shopId)}` : '';
+      const targetShop = profile?.shopId || business?.shopId || '';
+      const targetBiz = profile?.businessId || business?.id || '';
+      const currentUid = profile?.uid || user?.uid || '';
+
+      const shopParam = targetShop ? `&shopId=${encodeURIComponent(targetShop)}` : '';
       const { data } = await safeFetchJson<{ success: boolean; products?: any[]; error?: string }>(`/api/products?forAdmin=true${shopParam}`);
       if (data && data.success && Array.isArray(data.products)) {
-        const scoped = profile?.role === 'admin' && (profile.shopId || profile.businessId)
-          ? data.products.filter((p: any) => 
-              (profile.shopId && p.shopId === profile.shopId) ||
-              (profile.businessId && p.businessId === profile.businessId)
-            )
+        const scoped = profile?.role === 'admin'
+          ? data.products.filter((p: any) => {
+              const matchCreator = currentUid && p.createdBy && p.createdBy.toLowerCase() === currentUid.toLowerCase();
+              const matchShop = targetShop && p.shopId && p.shopId.toUpperCase() === targetShop.toUpperCase();
+              const matchBiz = targetBiz && p.businessId && p.businessId === targetBiz;
+              const matchUnassigned = (!p.shopId && !p.businessId);
+              return Boolean(matchCreator || matchShop || matchBiz || matchUnassigned);
+            })
           : data.products;
         setProducts(scoped);
       } else {
@@ -143,11 +150,34 @@ export default function AdminProductsPage() {
             ...d.data(),
           }));
 
-          if (profile?.role === 'admin' && (profile.shopId || profile.businessId)) {
-            productList = productList.filter((p: any) =>
-              (profile.shopId && p.shopId === profile.shopId) ||
-              (profile.businessId && p.businessId === profile.businessId)
-            );
+          const targetShop = profile?.shopId || business?.shopId || '';
+          const targetBiz = profile?.businessId || business?.id || '';
+          const currentUid = profile?.uid || user?.uid || '';
+
+          if (profile?.role === 'admin') {
+            productList = productList.filter((p: any) => {
+              const matchCreator = currentUid && p.createdBy && p.createdBy.toLowerCase() === currentUid.toLowerCase();
+              const matchShop = targetShop && p.shopId && p.shopId.toUpperCase() === targetShop.toUpperCase();
+              const matchBiz = targetBiz && p.businessId && p.businessId === targetBiz;
+              const matchUnassigned = (!p.shopId && !p.businessId);
+              return Boolean(matchCreator || matchShop || matchBiz || matchUnassigned);
+            });
+
+            // Automatically backfill shopId and businessId for unassigned or creator-matched products
+            if (targetShop || targetBiz) {
+              snapshot.docs.forEach((d) => {
+                const p = d.data();
+                const isCreator = currentUid && p.createdBy && p.createdBy.toLowerCase() === currentUid.toLowerCase();
+                const isUnassigned = !p.shopId && !p.businessId;
+                if ((isCreator || isUnassigned) && (!p.shopId || !p.businessId)) {
+                  updateDoc(doc(db, 'products', d.id), {
+                    shopId: targetShop || 'SHOP-D9E8',
+                    businessId: targetBiz || 'biz_1791736912551_weqjk8',
+                    updatedAt: new Date().toISOString(),
+                  }).catch(() => {});
+                }
+              });
+            }
           }
 
           productList.sort((a, b) => {
@@ -172,7 +202,7 @@ export default function AdminProductsPage() {
     }
 
     return () => unsubscribe();
-  }, [profile?.shopId, profile?.businessId, profile?.role]);
+  }, [profile?.shopId, profile?.businessId, profile?.role, profile?.uid, user?.uid, business?.shopId, business?.id]);
 
   // 4. Live Active/Inactive Status Toggle Switch
   const handleToggleStatus = async (productId: string, currentIsPublished: boolean) => {

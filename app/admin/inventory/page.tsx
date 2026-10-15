@@ -49,6 +49,7 @@ export interface InventoryProduct {
   isPublished?: boolean;
   shopId?: string;
   businessId?: string;
+  createdBy?: string;
   updatedAt?: string;
   lastStockAdjustment?: {
     previousStock: number;
@@ -70,7 +71,7 @@ const ADJUSTMENT_REASONS = [
 ];
 
 export default function AdminInventoryPage() {
-  const { profile, user } = useAuth();
+  const { profile, business, user } = useAuth();
   const [products, setProducts] = useState<InventoryProduct[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -99,8 +100,9 @@ export default function AdminInventoryPage() {
     }
 
     setIsLoading(true);
-    const targetShopId = profile.shopId;
-    const targetBizId = profile.businessId;
+    const targetShopId = profile.shopId || business?.shopId || '';
+    const targetBizId = profile.businessId || business?.id || '';
+    const currentUid = profile.uid || user?.uid || '';
 
     try {
       const prodRef = collection(db, 'products');
@@ -130,12 +132,14 @@ export default function AdminInventoryPage() {
             } as InventoryProduct;
           });
 
-          // Strict Business Scoping
-          if (profile.role === 'admin' && (targetShopId || targetBizId)) {
+          // Strict Business Scoping with Creator and Legacy Fallback
+          if (profile.role === 'admin') {
             list = list.filter((p) => {
-              const matchShop = targetShopId && p.shopId === targetShopId;
-              const matchBiz = targetBizId && p.businessId === targetBizId;
-              return matchShop || matchBiz;
+              const matchCreator = currentUid && p.createdBy && p.createdBy.toLowerCase() === currentUid.toLowerCase();
+              const matchShop = targetShopId && p.shopId && p.shopId.toUpperCase() === targetShopId.toUpperCase();
+              const matchBiz = targetBizId && p.businessId && p.businessId === targetBizId;
+              const matchUnassigned = (!p.shopId && !p.businessId);
+              return Boolean(matchCreator || matchShop || matchBiz || matchUnassigned);
             });
           }
 
