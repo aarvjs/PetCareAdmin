@@ -71,42 +71,58 @@ export default function AdminLoginPage() {
       const userDocRef = doc(db, 'users', user.uid);
       const docSnap = await getDoc(userDocRef);
 
-      let profileData: UserProfile = {
-        uid: user.uid,
-        fullName: user.displayName || 'Administrator',
-        email: user.email || cleanEmail,
-        role: 'admin',
-        status: 'active',
-      };
-
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        
-        // Strict Role Check: Allow only 'admin' or 'super_admin'
-        if (data?.role !== 'admin' && data?.role !== 'super_admin') {
-          await signOut(auth);
-          setAuthError('Access Denied: Account does not have Administrator privileges.');
-          setIsLoading(false);
-          return;
-        }
-
-        if (data?.status === 'inactive' || data?.status === 'suspended') {
-          await signOut(auth);
-          setAuthError('Your Administrator account has been deactivated.');
-          setIsLoading(false);
-          return;
-        }
-
-        profileData = {
-          uid: user.uid,
-          fullName: data.fullName || user.displayName || 'Administrator',
-          email: data.email || user.email || cleanEmail,
-          phone: data.phone || '',
-          role: data.role || 'admin',
-          status: data.status || 'active',
-          permissions: data.permissions || [],
-        };
+      if (!docSnap.exists()) {
+        await signOut(auth);
+        setAuthError('No Administrator profile is provisioned for this account. Please contact your Super Administrator.');
+        setIsLoading(false);
+        return;
       }
+
+      const data = docSnap.data();
+
+      // Explicitly reject Super Admin from regular Admin login flow
+      if (data?.role === 'super_admin') {
+        await signOut(auth);
+        setAuthError('This account is registered as a Super Administrator. Please sign in via the Super Admin Portal.');
+        setIsLoading(false);
+        return;
+      }
+
+      // Strict Role Check: Allow ONLY 'admin'
+      if (data?.role !== 'admin') {
+        await signOut(auth);
+        setAuthError('Access Denied: Account does not have Administrator privileges.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data?.status === 'inactive' || data?.status === 'suspended') {
+        await signOut(auth);
+        setAuthError('Your Administrator account has been deactivated. Please contact your Super Administrator.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (!data?.shopId && !data?.businessId) {
+        await signOut(auth);
+        setAuthError('Your Administrator account has not been assigned to any registered clinic or business. Please contact your Super Administrator.');
+        setIsLoading(false);
+        return;
+      }
+
+      const profileData: UserProfile = {
+        uid: user.uid,
+        fullName: data.fullName || user.displayName || 'Administrator',
+        email: data.email || user.email || cleanEmail,
+        phone: data.phone || '',
+        role: 'admin',
+        status: data.status || 'active',
+        shopId: data.shopId || '',
+        businessId: data.businessId || '',
+        assignedBusinessName: data.assignedBusinessName || '',
+        modules: data.modules || [],
+        permissions: data.permissions || [],
+      };
 
       // 3. Persist authenticated session in AuthContext & sessionStorage
       setSessionUser(profileData);
@@ -125,22 +141,6 @@ export default function AdminLoginPage() {
         friendlyMessage = 'This administrator account has been disabled in Firebase.';
       } else if (error.code === 'auth/too-many-requests') {
         friendlyMessage = 'Too many failed login attempts. Please try again later.';
-      }
-
-      // Fallback session verification if Firebase Auth client is uninitialized in dev
-      if (cleanEmail.includes('admin') && formData.password.length >= 6) {
-        setSessionUser({
-          uid: `admin-session-${Date.now()}`,
-          fullName: 'Administrator',
-          email: cleanEmail,
-          role: 'admin',
-          status: 'active',
-        });
-        setSuccessMessage('Administrator session active! Redirecting to Dashboard...');
-        setTimeout(() => {
-          router.push('/admin/dashboard');
-        }, 400);
-        return;
       }
 
       setAuthError(friendlyMessage);

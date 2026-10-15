@@ -15,7 +15,11 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
 
   useEffect(() => {
     if (!loading) {
-      if (!isAuthenticated || !profile || profile.role !== 'super_admin') {
+      if (!isAuthenticated || !profile) {
+        router.replace('/super-admin-login');
+      } else if (profile.role === 'admin') {
+        router.replace('/admin/dashboard');
+      } else if (profile.role !== 'super_admin') {
         router.replace('/super-admin-login');
       } else if (profile.status === 'inactive' || profile.status === 'suspended') {
         router.replace('/super-admin-login?error=account_deactivated');
@@ -51,6 +55,31 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
           <div className="w-full bg-[#E8ECF0] h-1.5 rounded-full overflow-hidden">
             <div className="bg-[#7567E8] h-full w-2/3 animate-pulse rounded-full" />
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Clinic Admin detected in Super Admin portal
+  if (profile?.role === 'admin') {
+    return (
+      <div className="min-h-screen bg-[#FAFCFD] flex items-center justify-center p-4">
+        <div className="bg-white border border-[#E8ECF0] rounded-3xl p-8 max-w-sm w-full text-center shadow-lg space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
+            <ShieldAlert className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-base font-extrabold text-[#25242A]">Clinic Administrator Account</h2>
+            <p className="text-xs text-[#777980] font-medium mt-1">
+              This portal is restricted to Central Super Administrators. Redirecting to your Clinic Admin Panel...
+            </p>
+          </div>
+          <button
+            onClick={() => router.replace('/admin/dashboard')}
+            className="w-full py-2.5 bg-[#25242A] text-white font-bold text-xs rounded-xl hover:bg-black transition-colors"
+          >
+            Go to Admin Dashboard
+          </button>
         </div>
       </div>
     );

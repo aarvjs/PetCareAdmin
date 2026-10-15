@@ -90,9 +90,32 @@ export async function POST(request: Request) {
       computedPermissions.push('doctors', 'services', 'vaccinations', 'appointments', 'pets');
     }
 
-    // 4. Create Admin Account Server-Side via Firebase Admin SDK
+    // 4. Check for conflicting Super Admin role
+    const cleanEmail = email.trim().toLowerCase();
+    if (hasServiceAccount() && adminDb) {
+      try {
+        const existingUsers = await adminDb.collection('users').where('email', '==', cleanEmail).limit(1).get();
+        if (!existingUsers.empty) {
+          const existingData = existingUsers.docs[0].data();
+          if (existingData?.role === 'super_admin') {
+            return NextResponse.json(
+              {
+                success: false,
+                error: { code: 'ROLE_CONFLICT', message: 'This email is already registered as a Super Administrator and cannot be converted to a Clinic Admin.' },
+                requestId,
+              },
+              { status: 409 }
+            );
+          }
+        }
+      } catch (checkErr) {
+        // continue to createServerUserProfile validation
+      }
+    }
+
+    // 5. Create Admin Account Server-Side via Firebase Admin SDK
     const userResult = await createServerUserProfile({
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       password: password || undefined,
       fullName: fullName.trim(),
       phone: phone ? phone.trim() : '',
@@ -190,7 +213,10 @@ export async function POST(request: Request) {
     let statusCode = 500;
     let errorMsg = error.message || 'Failed to create Admin account.';
 
-    if (error.message && error.message.includes('already registered')) {
+    if (error.message && error.message.includes('Super Administrator')) {
+      statusCode = 409;
+      errorMsg = error.message;
+    } else if (error.message && error.message.includes('already registered')) {
       statusCode = 409;
       errorMsg = 'This email address is already registered in Firebase.';
     }

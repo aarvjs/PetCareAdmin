@@ -33,7 +33,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     if (!loading) {
-      if (!isAuthenticated || !profile || (profile.role !== 'admin' && profile.role !== 'super_admin')) {
+      if (!isAuthenticated || !profile) {
+        router.replace('/admin-login');
+      } else if (profile.role === 'super_admin') {
+        router.replace('/super-admin');
+      } else if (profile.role !== 'admin') {
         router.replace('/admin-login');
       }
     }
@@ -51,7 +55,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     );
   }
 
-  if (!isAuthenticated || !profile || (profile.role !== 'admin' && profile.role !== 'super_admin')) {
+  if (profile?.role === 'super_admin') {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-white border border-[#7567E8]/30 shadow-lg flex items-center justify-center text-[#7567E8] mb-4">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+        <h2 className="text-sm font-bold text-[#25242A]">Super Administrator Session Detected</h2>
+        <p className="text-xs text-[#737780] mt-1 font-medium max-w-sm">
+          You are currently signed in with Super Administrator privileges. The Admin Panel is exclusively for registered Clinic Administrators.
+        </p>
+        <button
+          onClick={() => router.replace('/super-admin')}
+          className="mt-4 px-5 py-2.5 bg-[#7567E8] text-white rounded-xl text-xs font-bold hover:bg-[#6354D6] transition-colors"
+        >
+          Go to Super Admin Control Center
+        </button>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !profile || profile.role !== 'admin') {
     return (
       <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-center">
         <div className="w-16 h-16 rounded-2xl bg-white border border-red-200 shadow-lg flex items-center justify-center text-red-600 mb-4">
@@ -143,19 +167,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   // Multi-tenant Module Permission Enforcement
-  const isSuper = profile.role === 'super_admin';
   const mods = profile.modules || [];
   const perms = profile.permissions || [];
 
   const hasEcommerce =
-    isSuper ||
     mods.includes('ecommerce') ||
     perms.includes('products') ||
     perms.includes('p_products') ||
     perms.includes('ALL_ACCESS');
 
   const hasClinic =
-    isSuper ||
     mods.includes('clinic') ||
     perms.includes('doctors') ||
     perms.includes('p_doctors') ||

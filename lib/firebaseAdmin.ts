@@ -308,6 +308,13 @@ export async function createServerUserProfile(params: {
       if (err.code === 'auth/email-already-exists' || err.code === 'auth/email-already-in-use') {
         const existingUser = await adminAuth.getUserByEmail(cleanEmail);
         uid = existingUser.uid;
+
+        // Ensure we do not demote or overwrite an existing Super Administrator
+        const existingDoc = await adminDb.collection('users').doc(uid).get();
+        if (existingDoc.exists && existingDoc.data()?.role === 'super_admin' && role !== 'super_admin') {
+          throw new Error('This email address is already registered as a Super Administrator and cannot be changed to an Admin.');
+        }
+
         await adminAuth.updateUser(uid, {
           password: userPassword,
           displayName: fullName,
@@ -352,11 +359,18 @@ export async function createServerUserProfile(params: {
         try {
           userCred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
           uid = userCred.user.uid;
+
+          // Guard against demoting an existing Super Administrator
+          const existingSnap = await getDoc(doc(secondaryDb, 'users', uid));
+          if (existingSnap.exists() && existingSnap.data()?.role === 'super_admin' && role !== 'super_admin') {
+            throw new Error('This email address is already registered as a Super Administrator and cannot be changed to an Admin.');
+          }
+
           if (userCred.user) {
             await updatePassword(userCred.user, userPassword);
           }
-        } catch (e) {
-          throw new Error('This email address is already registered in Firebase Authentication.');
+        } catch (e: any) {
+          throw new Error(e.message || 'This email address is already registered in Firebase Authentication.');
         }
       } else {
         throw err;
@@ -449,24 +463,70 @@ export async function checkSuperAdminExists(): Promise<boolean> {
  */
 export async function isRequestAuthorizedAsSuperAdmin(request: Request, body?: any): Promise<{ authorized: boolean; error?: string; status?: number }> {
   const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+  let requesterUid = body?.requesterUid || body?.createdByUid || request.headers.get('x-super-admin-uid') || request.headers.get('x-user-uid');
+
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7).trim();
     if (adminAuth && adminDb && hasServiceAccount()) {
       try {
         const decoded = await adminAuth.verifyIdToken(token);
-        const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-        if (userDoc.exists && userDoc.data()?.role === 'super_admin' && userDoc.data()?.status !== 'inactive' && userDoc.data()?.status !== 'suspended') {
-          return { authorized: true };
-        }
+        requesterUid = decoded.uid;
       } catch (e: any) {
         // ignore
       }
+    } else {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.user_id || payload.sub) {
+            requesterUid = payload.user_id || payload.sub;
+          }
+        }
+      } catch (e) {}
     }
   }
 
-  const requesterUid = body?.requesterUid || body?.createdByUid || request.headers.get('x-super-admin-uid');
-  if (requesterUid === 'super_admin' || requesterUid === 'super-admin-uid-001' || requesterUid) {
-    return { authorized: true };
+  if (!requesterUid) {
+    return {
+      authorized: false,
+      error: 'Unauthorized: Access restricted to active Super Administrators only.',
+      status: 401,
+    };
+  }
+
+  // 1. Authoritative check via Admin SDK if Service Account active
+  if (hasServiceAccount() && adminDb) {
+    try {
+      const userDoc = await adminDb.collection('users').doc(requesterUid).get();
+      if (userDoc.exists && userDoc.data()?.role === 'super_admin' && userDoc.data()?.status !== 'inactive' && userDoc.data()?.status !== 'suspended') {
+        return { authorized: true };
+      }
+      return { authorized: false, error: 'Access Denied: Account is not an active Super Administrator.', status: 403 };
+    } catch (e: any) {
+      console.warn('[Super Admin Auth Check Warning]', e.message);
+    }
+  }
+
+  // 2. Client SDK Fallback mode
+  try {
+    const clientDb = await getServerAuthenticatedDb();
+    const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (data?.role === 'super_admin' && data?.status !== 'inactive' && data?.status !== 'suspended') {
+        return { authorized: true };
+      }
+      return { authorized: false, error: 'Access Denied: Account is not an active Super Administrator.', status: 403 };
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // Allow one-time setup bootstrap if no super admin exists yet
+  if (requesterUid === 'system_bootstrap') {
+    const exists = await checkSuperAdminExists();
+    if (!exists) return { authorized: true };
   }
 
   return {

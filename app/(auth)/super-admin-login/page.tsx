@@ -60,42 +60,41 @@ export default function SuperAdminLoginPage() {
       const userCredential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
       const user = userCredential.user;
 
-      // 2. Fetch Firestore profile & verify role
+      // 2. Fetch Firestore profile & verify authoritative super_admin role
       const userDocRef = doc(db, 'users', user.uid);
       const docSnap = await getDoc(userDocRef);
 
-      let profileData = {
-        uid: user.uid,
-        fullName: 'Super Admin',
-        email: user.email || email.trim().toLowerCase(),
-        role: 'super_admin' as const,
-        status: 'active' as const,
-      };
-
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data?.role !== 'super_admin') {
-          await signOut(auth);
-          setErrorMessage('Access Denied: Account does not have Super Admin privileges.');
-          setIsLoading(false);
-          return;
-        }
-
-        if (data?.status === 'inactive' || data?.status === 'suspended') {
-          await signOut(auth);
-          setErrorMessage('Your Super Admin account has been deactivated.');
-          setIsLoading(false);
-          return;
-        }
-
-        profileData = {
-          uid: user.uid,
-          fullName: data.fullName || 'Super Admin',
-          email: data.email || user.email || email,
-          role: 'super_admin',
-          status: data.status || 'active',
-        };
+      if (!docSnap.exists()) {
+        await signOut(auth);
+        setErrorMessage('No Super Administrator profile found for this account.');
+        setIsLoading(false);
+        return;
       }
+
+      const data = docSnap.data();
+      if (data?.role !== 'super_admin') {
+        await signOut(auth);
+        setErrorMessage('Access Denied: Account does not possess Super Administrator privileges. If you are a Clinic Administrator, please use the Admin Login.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data?.status === 'inactive' || data?.status === 'suspended') {
+        await signOut(auth);
+        setErrorMessage('Your Super Administrator account has been deactivated.');
+        setIsLoading(false);
+        return;
+      }
+
+      const profileData: any = {
+        uid: user.uid,
+        fullName: data.fullName || 'Super Admin',
+        email: data.email || user.email || email.trim().toLowerCase(),
+        phone: data.phone || '',
+        role: 'super_admin',
+        status: data.status || 'active',
+        permissions: data.permissions || ['ALL_ACCESS'],
+      };
 
       setSessionUser(profileData);
       setSuccessMessage('Super Admin session authenticated! Redirecting to Control Center...');
@@ -104,26 +103,18 @@ export default function SuperAdminLoginPage() {
         router.push('/super-admin');
       }, 400);
     } catch (error: any) {
-      console.warn('Firebase Login Error, fallback to session auth check:', error);
+      console.warn('Firebase Super Admin Login Error:', error);
 
-      // Fallback session auth check if Firebase Auth fails or uninitialized
-      if (email.toLowerCase().includes('admin') || password.length >= 6) {
-        setSessionUser({
-          uid: 'super-admin-uid-001',
-          fullName: 'Super Admin',
-          email: email.trim().toLowerCase(),
-          role: 'super_admin',
-          status: 'active',
-        });
-
-        setSuccessMessage('Super Admin authenticated! Redirecting to Control Center...');
-        setTimeout(() => {
-          router.push('/super-admin');
-        }, 400);
-        return;
+      let friendly = 'Invalid Super Admin email or password.';
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        friendly = 'Invalid Super Admin credentials. Please verify your email and password.';
+      } else if (error.code === 'auth/user-disabled') {
+        friendly = 'This Super Administrator account has been disabled in Firebase.';
+      } else if (error.code === 'auth/too-many-requests') {
+        friendly = 'Too many failed login attempts. Please try again later.';
       }
 
-      setErrorMessage('Invalid Super Admin email or password.');
+      setErrorMessage(friendly);
       setIsLoading(false);
     }
   };

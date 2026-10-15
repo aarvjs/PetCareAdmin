@@ -221,19 +221,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await fetchBusiness(data);
         return data;
       } else {
-        const stored = getStoredSession();
-        if (stored) {
-          setProfile(stored);
-          await fetchBusiness(stored);
-          return stored;
+        // Document does not exist in Firestore: clear any stale session
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('hp_session_user');
+          sessionStorage.removeItem('hp_session_business');
         }
         setProfile(null);
         setBusiness(null);
         return null;
       }
     } catch (error) {
+      console.warn('[fetchProfile Notice]', error);
       const stored = getStoredSession();
-      if (stored) {
+      if (stored && stored.uid === uid) {
         setProfile(stored);
         await fetchBusiness(stored);
         return stored;

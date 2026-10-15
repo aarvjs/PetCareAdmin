@@ -33,19 +33,16 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({ onMenuToggle, title = 
     }
   };
 
-  const isSuper = profile?.role === 'super_admin';
   const mods = profile?.modules || [];
   const perms = profile?.permissions || [];
 
   const hasEcommerce =
-    isSuper ||
     mods.includes('ecommerce') ||
     perms.includes('products') ||
     perms.includes('p_products') ||
     perms.includes('ALL_ACCESS');
 
   const hasClinic =
-    isSuper ||
     mods.includes('clinic') ||
     perms.includes('doctors') ||
     perms.includes('p_doctors') ||

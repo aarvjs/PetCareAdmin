@@ -71,50 +71,55 @@ export default function DoctorLoginPage() {
       const userDocRef = doc(db, 'users', user.uid);
       const docSnap = await getDoc(userDocRef);
 
-      let profileData: UserProfile = {
-        uid: user.uid,
-        fullName: user.displayName || 'Doctor',
-        email: user.email || cleanEmail,
-        role: 'doctor',
-        status: 'active',
-      };
-
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-
-        // Strict Role Check: Allow only 'doctor' or 'super_admin'
-        if (data?.role !== 'doctor' && data?.role !== 'super_admin') {
-          await signOut(auth);
-          setAuthError('Access Denied: Account does not have Doctor privileges.');
-          setIsLoading(false);
-          return;
-        }
-
-        if (data?.status === 'inactive' || data?.status === 'suspended') {
-          await signOut(auth);
-          setAuthError('Your Doctor account has been deactivated.');
-          setIsLoading(false);
-          return;
-        }
-
-        profileData = {
-          uid: user.uid,
-          fullName: data.fullName || user.displayName || 'Doctor',
-          email: data.email || user.email || cleanEmail,
-          phone: data.phone || '',
-          role: data.role || 'doctor',
-          status: data.status || 'active',
-          shopId: data.shopId || '',
-          businessId: data.businessId || '',
-          assignedBusinessName: data.assignedBusinessName || '',
-          permissions: data.permissions || [],
-          qualification: data.qualification,
-          specialization: data.specialization,
-          experience: data.experience,
-          availability: data.availability,
-          registrationNumber: data.registrationNumber,
-        };
+      if (!docSnap.exists()) {
+        await signOut(auth);
+        setAuthError('No Doctor profile is provisioned for this account.');
+        setIsLoading(false);
+        return;
       }
+
+      const data = docSnap.data();
+
+      // Explicitly reject Super Admin from Doctor workspace login
+      if (data?.role === 'super_admin') {
+        await signOut(auth);
+        setAuthError('This account is registered as a Super Administrator. Please use the Super Admin Portal to sign in.');
+        setIsLoading(false);
+        return;
+      }
+
+      // Strict Role Check: Allow only 'doctor'
+      if (data?.role !== 'doctor') {
+        await signOut(auth);
+        setAuthError('Access Denied: Account does not have Doctor privileges.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data?.status === 'inactive' || data?.status === 'suspended') {
+        await signOut(auth);
+        setAuthError('Your Doctor account has been deactivated.');
+        setIsLoading(false);
+        return;
+      }
+
+      const profileData: UserProfile = {
+        uid: user.uid,
+        fullName: data.fullName || user.displayName || 'Doctor',
+        email: data.email || user.email || cleanEmail,
+        phone: data.phone || '',
+        role: 'doctor',
+        status: data.status || 'active',
+        shopId: data.shopId || '',
+        businessId: data.businessId || '',
+        assignedBusinessName: data.assignedBusinessName || '',
+        permissions: data.permissions || [],
+        qualification: data.qualification,
+        specialization: data.specialization,
+        experience: data.experience,
+        availability: data.availability,
+        registrationNumber: data.registrationNumber,
+      };
 
       // 3. Persist authenticated session in AuthContext & sessionStorage
       setSessionUser(profileData);
@@ -131,22 +136,6 @@ export default function DoctorLoginPage() {
         friendlyMessage = 'Invalid doctor email or password. Please check your credentials.';
       } else if (error.code === 'auth/user-disabled') {
         friendlyMessage = 'This doctor account has been disabled in Firebase.';
-      }
-
-      // Fallback session verification if Firebase Auth client is uninitialized in dev
-      if (cleanEmail.includes('doctor') && formData.password.length >= 6) {
-        setSessionUser({
-          uid: `doctor-session-${Date.now()}`,
-          fullName: 'Doctor Specialist',
-          email: cleanEmail,
-          role: 'doctor',
-          status: 'active',
-        });
-        setSuccessMessage('Doctor workspace active! Redirecting to Dashboard...');
-        setTimeout(() => {
-          router.push('/doctor/dashboard');
-        }, 400);
-        return;
       }
 
       setAuthError(friendlyMessage);
