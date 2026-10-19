@@ -203,30 +203,55 @@ service cloud.firestore {
 
     // ---------- PETS ----------
     match /pets/{petId} {
-      allow read: if isStaff()
+      allow read: if (signedIn() && resource.data.ownerId == request.auth.uid)
+        || isSuperAdmin()
         || (
-          signedIn()
-          && resource.data.ownerId == request.auth.uid
+          (isAdmin() || isDoctor())
+          && (
+            resource.data.businessId == userData().businessId
+            || resource.data.shopId == userData().shopId
+          )
         );
 
-      allow create: if signedIn()
-        && request.resource.data.ownerId == request.auth.uid;
-
-      allow update: if isAdmin()
+      allow create: if (signedIn() && request.resource.data.ownerId == request.auth.uid)
         || isSuperAdmin()
-        || isDoctor()
+        || (
+          (isAdmin() || isDoctor())
+          && (
+            request.resource.data.businessId == userData().businessId
+            || request.resource.data.shopId == userData().shopId
+          )
+        );
+
+      allow update: if isSuperAdmin()
+        || (
+          (isAdmin() || isDoctor())
+          && (
+            resource.data.businessId == userData().businessId
+            || resource.data.shopId == userData().shopId
+          )
+        )
         || (
           signedIn()
           && resource.data.ownerId == request.auth.uid
           && request.resource.data.ownerId == resource.data.ownerId
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['registrationNumber', 'businessId', 'shopId', 'ownerId'])
         );
 
-      allow delete: if isAdmin()
-        || isSuperAdmin()
+      allow delete: if isSuperAdmin()
         || (
-          signedIn()
-          && resource.data.ownerId == request.auth.uid
+          isAdmin()
+          && (
+            resource.data.businessId == userData().businessId
+            || resource.data.shopId == userData().shopId
+          )
         );
+    }
+
+    // ---------- COUNTERS ----------
+    match /counters/{counterId} {
+      allow read: if true;
+      allow write: if signedIn();
     }
 
     // ---------- MEDICAL RECORDS ----------

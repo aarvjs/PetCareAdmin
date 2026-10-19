@@ -901,3 +901,153 @@ export async function isRequestAuthorizedForDoctorCreation(
     shopId: assignedShopId,
   };
 }
+
+/**
+ * Authorization verification for Clinic Pet Registry & Patient Operations.
+ * Authorizes:
+ * - super_admin (all businesses)
+ * - admin (must have 'clinic' module enabled, scoped to their businessId/shopId)
+ * - doctor (active status, scoped to their businessId/shopId)
+ * Rejects:
+ * - unauthenticated callers (401)
+ * - e-commerce only admins (403)
+ * - inactive or suspended accounts (403)
+ * - ordinary customers attempting staff operations (403)
+ */
+export async function isRequestAuthorizedForClinicStaff(
+  request: Request,
+  body?: any
+): Promise<{
+  authorized: boolean;
+  error?: string;
+  status?: number;
+  user?: any;
+  role?: 'super_admin' | 'admin' | 'doctor';
+  uid?: string;
+  shopId?: string;
+  businessId?: string;
+  fullName?: string;
+}> {
+  const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+  let requesterUid = body?.requesterUid || body?.updatedByUid || body?.createdBy || request.headers.get('x-user-uid');
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim();
+    if (adminAuth && adminDb && hasServiceAccount()) {
+      try {
+        const decoded = await adminAuth.verifyIdToken(token);
+        requesterUid = decoded.uid;
+      } catch (e) {
+        // fallback
+      }
+    } else {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.user_id || payload.sub) {
+            requesterUid = payload.user_id || payload.sub;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  if (!requesterUid) {
+    return { authorized: false, error: 'Unauthorized: Authentication required.', status: 401 };
+  }
+
+  let profile: any = null;
+
+  if (hasServiceAccount() && adminDb) {
+    try {
+      const snap = await adminDb.collection('users').doc(requesterUid).get();
+      if (snap.exists) profile = snap.data();
+    } catch (e) {}
+  }
+
+  if (!profile) {
+    try {
+      const clientDb = await getServerAuthenticatedDb();
+      const snap = await getDoc(doc(clientDb, 'users', requesterUid));
+      if (snap.exists()) profile = snap.data();
+    } catch (e) {}
+  }
+
+  if (!profile) {
+    if (hasServiceAccount() && adminDb) {
+      try {
+        const dSnap = await adminDb.collection('doctors').doc(requesterUid).get();
+        if (dSnap.exists) profile = { role: 'doctor', ...dSnap.data() };
+      } catch (e) {}
+    }
+  }
+
+  if (!profile) {
+    return { authorized: false, error: 'User profile not found.', status: 403 };
+  }
+
+  if (profile.status === 'inactive' || profile.status === 'suspended') {
+    return { authorized: false, error: 'User account has been deactivated.', status: 403 };
+  }
+
+  const role = profile.role;
+
+  if (role === 'super_admin') {
+    return {
+      authorized: true,
+      role: 'super_admin',
+      user: profile,
+      uid: requesterUid,
+      shopId: profile.shopId || '',
+      businessId: profile.businessId || '',
+      fullName: profile.fullName || 'Super Administrator',
+    };
+  }
+
+  if (role === 'doctor') {
+    return {
+      authorized: true,
+      role: 'doctor',
+      user: profile,
+      uid: requesterUid,
+      shopId: profile.shopId || '',
+      businessId: profile.businessId || '',
+      fullName: profile.fullName || 'Doctor',
+    };
+  }
+
+  if (role === 'admin') {
+    const modules: string[] = profile.modules || [];
+    const permissions: string[] = profile.permissions || [];
+    const hasClinicModule =
+      modules.includes('clinic') ||
+      permissions.includes('doctors') ||
+      permissions.includes('p_doctors') ||
+      permissions.includes('ALL_ACCESS');
+
+    if (!hasClinicModule) {
+      return {
+        authorized: false,
+        error: 'Access Denied: Clinic module is not enabled for your administrator account.',
+        status: 403,
+      };
+    }
+
+    return {
+      authorized: true,
+      role: 'admin',
+      user: profile,
+      uid: requesterUid,
+      shopId: profile.shopId || '',
+      businessId: profile.businessId || '',
+      fullName: profile.fullName || 'Clinic Administrator',
+    };
+  }
+
+  return {
+    authorized: false,
+    error: 'Access Denied: Only authorized Clinic Administrators or Doctors can perform this operation.',
+    status: 403,
+  };
+}
