@@ -153,6 +153,7 @@ export default function AdminCreateDoctorPage() {
           businessId: profile?.businessId || '',
           shopId: profile?.shopId || '',
           createdBy: profile?.uid || user?.uid || 'admin',
+          adminProfile: profile,
         }),
       });
 

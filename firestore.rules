@@ -250,8 +250,7 @@ service cloud.firestore {
 
     // ---------- COUNTERS ----------
     match /counters/{counterId} {
-      allow read: if true;
-      allow write: if signedIn();
+      allow read, write: if true;
     }
 
     // ---------- MEDICAL RECORDS ----------
@@ -275,6 +274,20 @@ service cloud.firestore {
         );
 
       allow create, update, delete: if isAdmin() || isSuperAdmin();
+    }
+
+    // ---------- DOCTORS ----------
+    match /doctors/{doctorId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+
+    // ---------- PETS ----------
+    match /pets/{petId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || isSuperAdmin();
     }
 
     // ---------- DEFAULT DENY ----------

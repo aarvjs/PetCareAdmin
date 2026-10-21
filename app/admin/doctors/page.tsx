@@ -75,8 +75,8 @@ export default function AdminDoctorsPage() {
       } else {
         // Fallback to client Firestore
         const q = targetShopId
-          ? query(collection(db, 'users'), where('role', '==', 'doctor'), where('shopId', '==', targetShopId))
-          : query(collection(db, 'users'), where('role', '==', 'doctor'));
+          ? query(collection(db, 'doctors'), where('shopId', '==', targetShopId))
+          : query(collection(db, 'doctors'));
         const snap = await getDocs(q);
         const list: DoctorRecord[] = [];
         snap.forEach((docSnap) => {
@@ -139,6 +139,10 @@ export default function AdminDoctorsPage() {
         status: newStatus.toLowerCase(),
         updatedAt: new Date().toISOString(),
       });
+      await updateDoc(doc(db, 'doctors', id), {
+        status: newStatus.toLowerCase(),
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
     } catch (err) {
       console.warn('Could not persist status toggle:', err);
     }
@@ -155,14 +159,16 @@ export default function AdminDoctorsPage() {
     );
 
     try {
-      await updateDoc(doc(db, 'users', selectedDoctor.id), {
+      const updatePayload = {
         fullName: formData.name,
         qualification: formData.qualification,
         specialization: formData.specialization,
         experience: formData.experience,
         phone: formData.phone,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      await updateDoc(doc(db, 'users', selectedDoctor.id), updatePayload);
+      await updateDoc(doc(db, 'doctors', selectedDoctor.id), updatePayload).catch(() => {});
     } catch (err) {
       console.warn('Failed to update doctor in Firestore:', err);
     }
@@ -198,9 +204,14 @@ export default function AdminDoctorsPage() {
               </span>
             </div>
           </div>
-          <span className="text-[10px] font-bold text-[#0284C7] bg-[#EAF8FE] px-2.5 py-1 rounded-lg">
-            Authorized Clinic Admin
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-extrabold text-[#0284C7] bg-[#EAF8FE] px-3 py-1 rounded-xl border border-[#0284C7]/20">
+              Total Doctors: {doctors.length}
+            </span>
+            <span className="text-[10px] font-bold text-[#0284C7] bg-[#EAF8FE] px-2.5 py-1 rounded-lg">
+              Authorized Clinic Admin
+            </span>
+          </div>
         </div>
       )}
 

@@ -5,6 +5,7 @@ import {
   adminDb,
   hasServiceAccount,
   getServerAuthenticatedDb,
+  fetchFirestoreCollectionRest,
 } from '@/lib/firebaseAdmin';
 import { collection, getDocs, query, where, doc, setDoc } from 'firebase/firestore';
 
@@ -21,32 +22,37 @@ export async function GET(request: Request) {
     let doctors: any[] = [];
 
     if (hasServiceAccount() && adminDb) {
-      let q = adminDb.collection('users').where('role', '==', 'doctor');
-      if (shopId) {
-        q = q.where('shopId', '==', shopId);
-      } else if (businessId) {
-        q = q.where('businessId', '==', businessId);
-      }
-      const snap = await q.get();
-      doctors = snap.docs.map((d) => ({ uid: d.id, id: d.id, ...d.data() }));
-    } else {
-      const clientDb = await getServerAuthenticatedDb();
-      try {
-        const q = query(collection(clientDb, 'users'), where('role', '==', 'doctor'));
-        const snap = await getDocs(q);
+      const snap = await adminDb.collection('doctors').get();
+      if (!snap.empty) {
         doctors = snap.docs.map((d) => ({ uid: d.id, id: d.id, ...d.data() }));
-
-        if (shopId) {
-          doctors = doctors.filter((d) => d.shopId === shopId);
-        } else if (businessId) {
-          doctors = doctors.filter((d) => d.businessId === businessId);
-        }
+      } else {
+        const uSnap = await adminDb.collection('users').where('role', '==', 'doctor').get();
+        doctors = uSnap.docs.map((d) => ({ uid: d.id, id: d.id, ...d.data() }));
+      }
+    } else {
+      try {
+        doctors = await fetchFirestoreCollectionRest('doctors');
       } catch (err: any) {
-        console.warn('[Admin Doctors GET Warning]', err.message);
+        console.warn('[Admin Doctors GET Warning via REST]', err.message);
+      }
+
+      if (doctors.length === 0) {
+        try {
+          const clientDb = await getServerAuthenticatedDb();
+          const snap = await getDocs(collection(clientDb, 'doctors'));
+          doctors = snap.docs.map((d) => ({ uid: d.id, id: d.id, ...d.data() }));
+        } catch (_) {}
       }
     }
 
-    return NextResponse.json({ success: true, doctors });
+    if (shopId) {
+      doctors = doctors.filter((d) => !d.shopId || d.shopId.toUpperCase() === shopId.toUpperCase());
+    } else if (businessId) {
+      doctors = doctors.filter((d) => !d.businessId || d.businessId === businessId);
+    }
+
+    return NextResponse.json({ success: true, count: doctors.length, doctors });
+
   } catch (error: any) {
     console.error('[Admin Doctors GET Error]', error);
     return NextResponse.json(
@@ -118,6 +124,15 @@ export async function POST(request: Request) {
       );
     }
 
+    const extendedDoctorFields = {
+      specialization: specialization.trim(),
+      qualification: qualification.trim(),
+      registrationNumber: registrationNumber.trim(),
+      experience: experience.trim(),
+      availability: availability.trim(),
+      assignedBusinessName: authCheck.admin.businessName || '',
+    };
+
     // 3. Create Doctor Account via Server-Side Firebase Provisioner
     // Enforcing the Admin's verified businessId & shopId
     const createdUser = await createServerUserProfile({
@@ -140,6 +155,7 @@ export async function POST(request: Request) {
         'settings',
       ],
       createdBy: authCheck.admin.uid,
+      extraData: extendedDoctorFields,
     });
 
     const extendedDoctorData = {
@@ -168,9 +184,13 @@ export async function POST(request: Request) {
       await adminDb.collection('users').doc(createdUser.uid).set(extendedDoctorData, { merge: true });
       await adminDb.collection('doctors').doc(createdUser.uid).set(extendedDoctorData, { merge: true });
     } else {
-      const clientDb = await getServerAuthenticatedDb();
-      await setDoc(doc(clientDb, 'users', createdUser.uid), extendedDoctorData, { merge: true });
-      await setDoc(doc(clientDb, 'doctors', createdUser.uid), extendedDoctorData, { merge: true });
+      try {
+        const clientDb = await getServerAuthenticatedDb();
+        await setDoc(doc(clientDb, 'users', createdUser.uid), extendedDoctorData, { merge: true });
+        await setDoc(doc(clientDb, 'doctors', createdUser.uid), extendedDoctorData, { merge: true });
+      } catch (err) {
+        // Document has already been persisted via authenticated REST provisioner
+      }
     }
 
     return NextResponse.json({
