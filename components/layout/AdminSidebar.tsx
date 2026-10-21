@@ -94,6 +94,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen = false, onCl
             items: [
               { name: 'Doctors', href: '/admin/doctors', icon: <Stethoscope className="w-5 h-5" /> },
               { name: 'Clinic Services', href: '/admin/services', icon: <Sparkles className="w-5 h-5" /> },
+              { name: 'Medicine Inventory', href: '/admin/clinic-inventory', icon: <Boxes className="w-5 h-5" /> },
               { name: 'Vaccinations', href: '/admin/vaccinations', icon: <Syringe className="w-5 h-5" /> },
               { name: 'Appointments', href: '/admin/appointments', icon: <Calendar className="w-5 h-5" /> },
               { name: 'Pets / Patients', href: '/admin/pets', icon: <Dog className="w-5 h-5" /> },

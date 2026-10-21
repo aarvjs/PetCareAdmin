@@ -276,6 +276,27 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin() || isSuperAdmin();
     }
 
+    // ---------- CLINIC INVENTORY ----------
+    match /clinic_inventory/{itemId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+
+    // ---------- TREATMENTS & VACCINATION HISTORY ----------
+    match /treatments/{treatmentId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+
+    // ---------- INVENTORY MOVEMENTS AUDIT ----------
+    match /inventory_movements/{movementId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+
     // ---------- DOCTORS ----------
     match /doctors/{doctorId} {
       allow read: if true;

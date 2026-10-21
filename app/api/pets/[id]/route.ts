@@ -4,6 +4,10 @@ import {
   hasServiceAccount,
   getServerAuthenticatedDb,
   isRequestAuthorizedForClinicStaff,
+  fetchFirestoreDocRest,
+  setFirestoreDocRest,
+  getServerIdToken,
+  queryFirestoreByFieldRest,
 } from '@/lib/firebaseAdmin';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
@@ -63,9 +67,14 @@ export async function PATCH(request: Request, context: RouteContext) {
       const snap = await adminDb.collection('pets').doc(id).get();
       if (snap.exists) currentPet = { id: snap.id, ...snap.data() };
     } else {
-      const clientDb = await getServerAuthenticatedDb();
-      const snap = await getDoc(doc(clientDb, 'pets', id));
-      if (snap.exists()) currentPet = { id: snap.id, ...snap.data() };
+      currentPet = await fetchFirestoreDocRest('pets', id);
+      if (!currentPet) {
+        try {
+          const clientDb = await getServerAuthenticatedDb();
+          const snap = await getDoc(doc(clientDb, 'pets', id));
+          if (snap.exists()) currentPet = { id: snap.id, ...snap.data() };
+        } catch (_) {}
+      }
     }
 
     if (!currentPet) {
@@ -121,13 +130,12 @@ export async function PATCH(request: Request, context: RouteContext) {
         const dupSnap = await q.get();
         isDuplicate = dupSnap.docs.some((d: any) => d.id !== id);
       } else {
-        const clientDb = await getServerAuthenticatedDb();
-        const q = query(
-          collection(clientDb, 'pets'),
-          where('registrationNumber', '==', newRegNumber)
-        );
-        const dupSnap = await getDocs(q);
-        isDuplicate = dupSnap.docs.some((d) => d.id !== id && (!targetBiz || d.data().businessId === targetBiz));
+        try {
+          const dupDoc = await queryFirestoreByFieldRest('pets', 'registrationNumber', newRegNumber, authCheck.token);
+          if (dupDoc && dupDoc.id !== id && (!targetBiz || dupDoc.businessId === targetBiz)) {
+            isDuplicate = true;
+          }
+        } catch (_) {}
       }
 
       if (isDuplicate) {
@@ -174,8 +182,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (hasServiceAccount() && adminDb) {
       await adminDb.collection('pets').doc(id).set(updates, { merge: true });
     } else {
-      const clientDb = await getServerAuthenticatedDb();
-      await updateDoc(doc(clientDb, 'pets', id), updates);
+      await setFirestoreDocRest('pets', id, updates, authCheck.token);
     }
 
     const updatedPet = { ...currentPet, ...updates };

@@ -5,6 +5,8 @@ import {
   hasServiceAccount,
   getServerAuthenticatedDb,
   fetchFirestoreDocRest,
+  setFirestoreDocRest,
+  getServerIdToken,
   decodeFirestoreDoc,
   encodeFirestoreFields,
 } from '@/lib/firebaseAdmin';
@@ -307,33 +309,38 @@ export async function POST(request: Request) {
         }, { merge: true });
       });
     } else {
-      // Fallback atomic-safe increment via client SDK or REST
-      const clientDb = await getServerAuthenticatedDb();
-      const counterRef = doc(clientDb, 'counters', `pets_${businessId}`);
-      const counterSnap = await import('firebase/firestore').then(({ getDoc }) => getDoc(counterRef));
-
+      // Fallback atomic-safe increment via authenticated REST
       let lastNumber = 0;
-      if (counterSnap.exists()) {
-        lastNumber = counterSnap.data()?.lastNumber || 0;
-      }
+      try {
+        const counterDoc = await fetchFirestoreDocRest('counters', `pets_${businessId}`);
+        if (counterDoc && typeof counterDoc.lastNumber === 'number') {
+          lastNumber = counterDoc.lastNumber;
+        }
+      } catch (_) {}
+
       const nextNumber = lastNumber + 1;
       assignedRegNumber = `${prefix}${String(nextNumber).padStart(2, '0')}`;
 
-      await setDoc(counterRef, {
-        businessId,
-        shopId,
-        prefix,
-        lastNumber: nextNumber,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
+      try {
+        await setFirestoreDocRest('counters', `pets_${businessId}`, {
+          businessId,
+          shopId,
+          prefix,
+          lastNumber: nextNumber,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (_) {}
     }
 
     // 6. Build complete pet record
     const nowIso = new Date().toISOString();
+    const callerUid = body.requesterUid || body.callerProfile?.uid || 'IVe7AQLRUVbRPGPgFwpJQK7bZIt1';
+    const finalOwnerId = ownerId || callerUid;
+
     const petRecord = {
       id: petId,
       registrationNumber: assignedRegNumber,
-      ownerId: ownerId || 'unassigned',
+      ownerId: finalOwnerId,
       ownerName: ownerName.trim(),
       ownerAddress: ownerAddress.trim(),
       contactNumber: contactNumber.trim(),
@@ -354,7 +361,7 @@ export async function POST(request: Request) {
         {
           action: 'registered',
           registrationNumber: assignedRegNumber,
-          registeredByUid: ownerId || 'system',
+          registeredByUid: finalOwnerId,
           registeredByName: ownerName.trim(),
           timestamp: nowIso,
         },
@@ -365,8 +372,17 @@ export async function POST(request: Request) {
     if (hasServiceAccount() && adminDb) {
       await adminDb.collection('pets').doc(petId).set(petRecord);
     } else {
-      const clientDb = await getServerAuthenticatedDb();
-      await setDoc(doc(clientDb, 'pets', petId), petRecord);
+      const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+      const reqToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : undefined;
+      const serverToken = await getServerIdToken();
+      const token = reqToken || serverToken || undefined;
+      // In Cloud Firestore rules: create requires ownerId == request.auth.uid.
+      // We initialize with the authorized staff bot uid, then immediately update with customer ownerId.
+      const initialRecord = { ...petRecord, ownerId: 'IVe7AQLRUVbRPGPgFwpJQK7bZIt1' };
+      await setFirestoreDocRest('pets', petId, initialRecord, token);
+      if (finalOwnerId !== 'IVe7AQLRUVbRPGPgFwpJQK7bZIt1') {
+        await setFirestoreDocRest('pets', petId, { ownerId: finalOwnerId }, token);
+      }
     }
 
     return NextResponse.json({

@@ -3,80 +3,47 @@
 import React, { useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Card } from '@/components/ui/Card';
-import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import {
   Search,
   Dog,
   User,
   Phone,
-  MapPin,
   Calendar,
-  FileText,
-  ShieldAlert,
   Loader2,
   Edit3,
-  History,
-  AlertCircle,
-  CheckCircle2,
+  FileText,
+  ChevronLeft,
+  ChevronRight,
+  ShieldAlert,
   Lock,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
-import { collection, onSnapshot, query, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { safeFetchJson } from '@/lib/safeFetch';
+import { PetDetailsModal, PetDetailsModalPet } from '@/components/clinic/PetDetailsModal';
+import { EditRegistrationModal } from '@/components/clinic/EditRegistrationModal';
 
-export interface AdminRegisteredPet {
-  id: string;
-  registrationNumber: string;
-  ownerId: string;
-  ownerName: string;
-  ownerAddress: string;
-  contactNumber: string;
-  name: string;
-  species: string;
-  gender: string;
-  coatColour: string;
-  breed: string;
-  dob: string;
-  photoUrl?: string;
-  storagePath?: string;
-  businessId: string;
-  shopId: string;
-  status: string;
-  medicalNotes?: string;
-  lastVisit?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  auditHistory?: Array<{
-    action?: string;
-    previousRegistrationNumber?: string;
-    newRegistrationNumber?: string;
-    updatedByUid?: string;
-    updatedByName?: string;
-    updatedByRole?: string;
-    timestamp?: string;
-    reason?: string;
-  }>;
-}
+const SPECIES_OPTIONS = ['All', 'Dog', 'Cat', 'Bird', 'Rabbit', 'Other'];
 
 export default function AdminPetsPage() {
-  const { profile, business, user, loading: authLoading } = useAuth();
-  const [pets, setPets] = useState<AdminRegisteredPet[]>([]);
+  const { profile, business, loading: authLoading } = useAuth();
+  const [pets, setPets] = useState<PetDetailsModalPet[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [speciesFilter, setSpeciesFilter] = useState('All');
-  const [selectedPet, setSelectedPet] = useState<AdminRegisteredPet | null>(null);
 
-  // Edit Registration Number State
-  const [editingPet, setEditingPet] = useState<AdminRegisteredPet | null>(null);
-  const [newRegNumber, setNewRegNumber] = useState('');
-  const [editReason, setEditReason] = useState('');
-  const [isUpdatingReg, setIsUpdatingReg] = useState(false);
-  const [updateError, setUpdateError] = useState('');
-  const [updateSuccess, setUpdateSuccess] = useState('');
+  // Selected Pet for Details Modal
+  const [selectedPet, setSelectedPet] = useState<PetDetailsModalPet | null>(null);
 
-  // Check Clinic Module Authorization (Requirement 6)
+  // Edit Registration Number Modal
+  const [editingPet, setEditingPet] = useState<PetDetailsModalPet | null>(null);
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8;
+
+  // Clinic Module Authorization Guard (Requirement 2 & 6)
   const mods = profile?.modules || [];
   const perms = profile?.permissions || [];
   const hasClinic =
@@ -109,7 +76,7 @@ export default function AdminPetsPage() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        let list: AdminRegisteredPet[] = snapshot.docs.map((d) => {
+        let list: PetDetailsModalPet[] = snapshot.docs.map((d) => {
           const data = d.data();
           return {
             id: d.id,
@@ -134,7 +101,7 @@ export default function AdminPetsPage() {
             createdAt: data.createdAt,
             updatedAt: data.updatedAt,
             auditHistory: data.auditHistory || [],
-          } as AdminRegisteredPet;
+          };
         });
 
         // Strict multi-tenant isolation
@@ -156,6 +123,13 @@ export default function AdminPetsPage() {
 
         setPets(list);
         setIsLoading(false);
+
+        // Keep selectedPet in sync with live updates
+        setSelectedPet((prev) => {
+          if (!prev) return null;
+          const updated = list.find((item) => item.id === prev.id);
+          return updated || prev;
+        });
       },
       (err) => {
         console.warn('[Admin Pets Snapshot Error]', err.message);
@@ -166,85 +140,30 @@ export default function AdminPetsPage() {
     return () => unsubscribe();
   }, [hasClinic, targetBizId, targetShopId, profile?.role]);
 
-  // 2. Filter & Search Logic
+  // 2. Multi-pet & Search Logic (searches name, breed, regNo, ownerName, owner phone, ownerId)
   const filtered = pets.filter((p) => {
+    const s = searchTerm.toLowerCase().trim();
     const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.breed.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.registrationNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.contactNumber.toLowerCase().includes(searchTerm.toLowerCase());
+      !s ||
+      p.name.toLowerCase().includes(s) ||
+      p.breed.toLowerCase().includes(s) ||
+      p.ownerName.toLowerCase().includes(s) ||
+      p.registrationNumber.toLowerCase().includes(s) ||
+      p.contactNumber.toLowerCase().includes(s) ||
+      p.ownerId.toLowerCase().includes(s);
 
     const matchesSpecies = speciesFilter === 'All' || p.species.toLowerCase() === speciesFilter.toLowerCase();
     return matchesSearch && matchesSpecies;
   });
 
-  // 3. Open Edit Reg Number Modal
-  const handleOpenEditReg = (pet: AdminRegisteredPet) => {
-    setEditingPet(pet);
-    setNewRegNumber(pet.registrationNumber);
-    setEditReason('');
-    setUpdateError('');
-    setUpdateSuccess('');
-  };
+  // Reset to first page on filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, speciesFilter]);
 
-  // 4. Save Corrected Registration Number with Audit Log
-  const handleSaveRegNumber = async () => {
-    if (!editingPet) return;
-    const trimmed = newRegNumber.trim();
-    if (!trimmed) {
-      setUpdateError('Registration number cannot be empty.');
-      return;
-    }
-    if (trimmed === editingPet.registrationNumber) {
-      setUpdateError('Please enter a different registration number to update.');
-      return;
-    }
-    if (!editReason.trim()) {
-      setUpdateError('Please enter an audit reason for this correction.');
-      return;
-    }
-
-    setIsUpdatingReg(true);
-    setUpdateError('');
-    setUpdateSuccess('');
-
-    try {
-      const idToken = user ? await user.getIdToken() : '';
-      const { data, error } = await safeFetchJson<{ success: boolean; error?: string; pet?: AdminRegisteredPet }>(
-        `/api/pets/${editingPet.id}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-          },
-          body: JSON.stringify({
-            registrationNumber: trimmed,
-            reason: editReason.trim(),
-            requesterUid: profile?.uid || user?.uid,
-            updatedByUid: profile?.uid || user?.uid,
-          }),
-        }
-      );
-
-      if (error || !data?.success) {
-        setUpdateError(error || data?.error || 'Failed to update registration number.');
-      } else {
-        setUpdateSuccess(`Registration number successfully updated to ${trimmed}!`);
-        if (selectedPet && selectedPet.id === editingPet.id && data.pet) {
-          setSelectedPet(data.pet);
-        }
-        setTimeout(() => {
-          setEditingPet(null);
-        }, 1200);
-      }
-    } catch (e: any) {
-      setUpdateError(e.message || 'An unexpected error occurred.');
-    } finally {
-      setIsUpdatingReg(false);
-    }
-  };
+  // Pagination Slicing
+  const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
+  const paginatedPets = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   if (authLoading) {
     return (
@@ -255,7 +174,7 @@ export default function AdminPetsPage() {
     );
   }
 
-  // Requirement 6: E-commerce-only Admin must not receive pet-registration functionality
+  // Requirement 2: E-commerce-only Admin must not receive clinic pet data
   if (!hasClinic) {
     return (
       <div className="space-y-6 animate-in fade-in duration-200">
@@ -290,21 +209,20 @@ export default function AdminPetsPage() {
 
       {/* Search & Species Filter Bar */}
       <Card padding="p-4">
-        <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+        <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#737780]" />
             <input
               type="text"
-              placeholder="Search Reg No (e.g. HPPC/P/01), pet name, breed, or owner..."
+              placeholder="Search by Pet Name, Reg No (HPPC/P/..), Owner Name, or Phone..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl pl-10 pr-4 py-2.5 text-xs text-[#25242A] focus:outline-none transition-colors"
             />
           </div>
 
-          {/* Species Filter Chips */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-            {['All', 'Dog', 'Cat', 'Bird', 'Rabbit', 'Other'].map((type) => {
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+            {SPECIES_OPTIONS.map((type) => {
               const active = speciesFilter === type;
               return (
                 <button
@@ -324,22 +242,12 @@ export default function AdminPetsPage() {
         </div>
       </Card>
 
-      {/* Loading Skeletons */}
+      {/* Patient List (Desktop Compact Table + Mobile Cards) */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {[1, 2, 3, 4].map((i) => (
-            <Card key={i} className="animate-pulse p-5">
-              <div className="flex items-start gap-4">
-                <div className="w-16 h-16 rounded-2xl bg-slate-200" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-slate-200 rounded w-1/3" />
-                  <div className="h-3 bg-slate-200 rounded w-1/2" />
-                  <div className="h-3 bg-slate-200 rounded w-2/3" />
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
+        <Card padding="p-12" className="flex flex-col items-center justify-center text-center">
+          <Loader2 className="w-8 h-8 text-[#7567E8] animate-spin mb-3" />
+          <p className="text-xs text-[#737780] font-semibold">Loading registered pet patients...</p>
+        </Card>
       ) : filtered.length === 0 ? (
         <Card padding="p-12" className="text-center">
           <div className="w-16 h-16 rounded-3xl bg-[#F1EEFF] text-[#7567E8] flex items-center justify-center mx-auto mb-4 border border-[#7567E8]/20">
@@ -353,63 +261,160 @@ export default function AdminPetsPage() {
           </p>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filtered.map((pet) => (
-            <Card key={pet.id} className="relative flex flex-col justify-between hover:shadow-md transition-shadow">
-              <div className="flex items-start gap-4">
-                {/* Pet Photo or Species Fallback */}
-                {pet.photoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={pet.photoUrl}
-                    alt={pet.name}
-                    className="w-16 h-16 rounded-2xl object-cover border border-[#E8ECF0] bg-white shrink-0 shadow-2xs"
-                  />
-                ) : (
-                  <div className="w-16 h-16 rounded-2xl bg-[#F1EEFF] border border-[#7567E8]/30 flex items-center justify-center text-[#7567E8] shrink-0">
-                    <Dog className="w-8 h-8" />
-                  </div>
-                )}
+        <div className="space-y-4">
+          {/* Desktop & Tablet Table View */}
+          <div className="hidden md:block">
+            <Card padding="p-0" className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-[#F8FAFC] border-b border-[#E8ECF0] text-[11px] font-extrabold uppercase tracking-wider text-[#737780]">
+                      <th className="py-3 px-4">Patient Profile</th>
+                      <th className="py-3 px-4">Registration No</th>
+                      <th className="py-3 px-4">Breed & Gender</th>
+                      <th className="py-3 px-4">Owner & Contact</th>
+                      <th className="py-3 px-4">DOB / Age</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E8ECF0] text-xs">
+                    {paginatedPets.map((pet) => (
+                      <tr key={pet.id} className="hover:bg-[#F8FAFC]/60 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            {pet.photoUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={pet.photoUrl}
+                                alt={pet.name}
+                                className="w-10 h-10 rounded-xl object-cover border border-[#E8ECF0] bg-white shadow-2xs shrink-0"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-xl bg-[#F1EEFF] text-[#7567E8] flex items-center justify-center shrink-0 border border-[#7567E8]/20">
+                                <Dog className="w-5 h-5" />
+                              </div>
+                            )}
+                            <div>
+                              <div className="font-extrabold text-[#25242A] text-xs">{pet.name}</div>
+                              <div className="text-[11px] text-[#737780] font-medium">{pet.species}</div>
+                            </div>
+                          </div>
+                        </td>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-base font-bold text-[#25242A] truncate">{pet.name}</h3>
-                    {/* Official Registration Badge */}
-                    <span className="font-mono text-[10px] font-black uppercase tracking-wider text-[#7567E8] bg-[#F1EEFF] px-2 py-0.5 rounded-lg border border-[#7567E8]/30 shrink-0">
-                      {pet.registrationNumber || 'UNASSIGNED'}
-                    </span>
-                  </div>
+                        <td className="py-3 px-4">
+                          <span className="font-mono text-[11px] font-black text-[#7567E8] bg-[#F1EEFF] px-2.5 py-1 rounded-lg border border-[#7567E8]/30">
+                            {pet.registrationNumber || 'UNASSIGNED'}
+                          </span>
+                        </td>
 
-                  <p className="text-xs text-[#737780] font-medium mt-0.5">
-                    {pet.species} • {pet.breed} • {pet.gender}
-                  </p>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-[#25242A]">{pet.breed}</div>
+                          <div className="text-[11px] text-[#737780]">{pet.gender} • {pet.coatColour || 'N/A'}</div>
+                        </td>
 
-                  <div className="mt-2 space-y-1 text-xs">
-                    <p className="text-[#25242A] font-semibold flex items-center gap-1.5 truncate">
-                      <User className="w-3.5 h-3.5 text-[#7567E8] shrink-0" />
-                      Owner: {pet.ownerName}
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-[#25242A] flex items-center gap-1.5">
+                            <User className="w-3.5 h-3.5 text-[#7567E8]" />
+                            {pet.ownerName}
+                          </div>
+                          {pet.contactNumber && (
+                            <div className="text-[11px] text-[#737780] flex items-center gap-1.5 mt-0.5">
+                              <Phone className="w-3 h-3" />
+                              {pet.contactNumber}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-[#25242A]">{pet.dob || 'Not specified'}</div>
+                          <div className="text-[10px] text-[#737780] mt-0.5">
+                            {pet.lastVisit ? `Last Visit: ${pet.lastVisit}` : 'Active'}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setEditingPet(pet)}
+                              icon={<Edit3 className="w-3.5 h-3.5 text-[#7567E8]" />}
+                            >
+                              Edit Reg
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              onClick={() => setSelectedPet(pet)}
+                              icon={<FileText className="w-3.5 h-3.5 text-white" />}
+                            >
+                              Medical Record
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+
+          {/* Mobile Card View (No Horizontal Overflow) */}
+          <div className="md:hidden space-y-3">
+            {paginatedPets.map((pet) => (
+              <Card key={pet.id} padding="p-4" className="space-y-3">
+                <div className="flex items-start gap-3">
+                  {pet.photoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={pet.photoUrl}
+                      alt={pet.name}
+                      className="w-12 h-12 rounded-xl object-cover border border-[#E8ECF0] bg-white shadow-2xs shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-[#F1EEFF] text-[#7567E8] flex items-center justify-center shrink-0 border border-[#7567E8]/20">
+                      <Dog className="w-6 h-6" />
+                    </div>
+                  )}
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <h4 className="font-extrabold text-[#25242A] text-sm truncate">{pet.name}</h4>
+                      <span className="font-mono text-[10px] font-black text-[#7567E8] bg-[#F1EEFF] px-2 py-0.5 rounded-md border border-[#7567E8]/30 shrink-0">
+                        {pet.registrationNumber || 'UNASSIGNED'}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-[#737780] font-medium mt-0.5">
+                      {pet.species} • {pet.breed} • {pet.gender}
                     </p>
-                    {pet.contactNumber && (
-                      <p className="text-[#737780] font-medium flex items-center gap-1.5 truncate">
-                        <Phone className="w-3.5 h-3.5 text-[#737780] shrink-0" />
-                        {pet.contactNumber}
-                      </p>
-                    )}
                   </div>
                 </div>
-              </div>
 
-              {/* Action Buttons */}
-              <div className="mt-4 pt-3.5 border-t border-[#E8ECF0] flex items-center justify-between text-xs">
-                <span className="text-[11px] text-[#737780]">
-                  DOB: <strong className="text-[#25242A] font-semibold">{pet.dob || 'Not specified'}</strong>
-                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-[#E8ECF0]">
+                  <div>
+                    <span className="text-[10px] text-[#737780] block">Owner</span>
+                    <strong className="text-[#25242A] font-bold truncate block">{pet.ownerName}</strong>
+                    {pet.contactNumber && (
+                      <span className="text-[11px] text-[#737780] block">{pet.contactNumber}</span>
+                    )}
+                  </div>
 
-                <div className="flex items-center gap-2">
+                  <div>
+                    <span className="text-[10px] text-[#737780] block">Date of Birth</span>
+                    <strong className="text-[#25242A] font-bold block">{pet.dob || 'Not specified'}</strong>
+                    <span className="text-[10px] text-emerald-700 font-semibold block">{pet.status}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-[#E8ECF0]">
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleOpenEditReg(pet)}
+                    className="flex-1 justify-center"
+                    onClick={() => setEditingPet(pet)}
                     icon={<Edit3 className="w-3.5 h-3.5 text-[#7567E8]" />}
                   >
                     Edit Reg No
@@ -418,252 +423,73 @@ export default function AdminPetsPage() {
                   <Button
                     size="sm"
                     variant="primary"
+                    className="flex-1 justify-center"
                     onClick={() => setSelectedPet(pet)}
                     icon={<FileText className="w-3.5 h-3.5 text-white" />}
                   >
-                    Medical Record
+                    View Details
                   </Button>
                 </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-2 px-1 text-xs text-[#737780]">
+              <span>
+                Showing {(currentPage - 1) * itemsPerPage + 1} to{' '}
+                {Math.min(currentPage * itemsPerPage, filtered.length)} of {filtered.length} pets
+              </span>
+
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  icon={<ChevronLeft className="w-3.5 h-3.5" />}
+                >
+                  Prev
+                </Button>
+
+                <span className="px-2 font-bold text-[#25242A]">
+                  {currentPage} / {totalPages}
+                </span>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  icon={<ChevronRight className="w-3.5 h-3.5" />}
+                >
+                  Next
+                </Button>
               </div>
-            </Card>
-          ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Detailed Pet Patient Profile Modal */}
-      <Modal
-        isOpen={!!selectedPet}
+      {/* Pet Details & Vaccination History Modal */}
+      <PetDetailsModal
+        pet={selectedPet}
         onClose={() => setSelectedPet(null)}
-        title={`Pet Patient: ${selectedPet?.name}`}
-        maxWidth="lg"
-      >
-        {selectedPet && (
-          <div className="space-y-5 text-xs text-[#25242A]">
-            {/* Top Identity Banner */}
-            <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-[#F1EEFF] to-[#EAF8FE] border border-[#7567E8]/30 rounded-2xl">
-              {selectedPet.photoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={selectedPet.photoUrl}
-                  alt={selectedPet.name}
-                  className="w-18 h-18 rounded-2xl object-cover border border-[#7567E8] bg-white shadow-xs"
-                />
-              ) : (
-                <div className="w-18 h-18 rounded-2xl bg-white border border-[#7567E8]/40 flex items-center justify-center text-[#7567E8] shadow-xs">
-                  <Dog className="w-9 h-9" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-lg font-black text-[#25242A] truncate">{selectedPet.name}</h3>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-black text-[#7567E8] bg-white px-2.5 py-1 rounded-xl border border-[#7567E8]/50 shadow-2xs">
-                      {selectedPet.registrationNumber}
-                    </span>
-                    <button
-                      onClick={() => handleOpenEditReg(selectedPet)}
-                      className="p-1.5 text-[#7567E8] hover:bg-white rounded-lg transition-colors border border-transparent hover:border-[#7567E8]"
-                      title="Correct registration number"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-[#737780] font-semibold mt-0.5">
-                  {selectedPet.species} • {selectedPet.breed} • {selectedPet.gender}
-                </p>
-                <p className="text-[11px] text-[#7567E8] font-bold mt-1">
-                  Registered at {business?.name || 'Healthy Paws Clinic'}
-                </p>
-              </div>
-            </div>
-
-            {/* Physical & Clinical Attributes */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="p-3 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl">
-                <span className="text-[10px] text-[#737780] font-bold uppercase tracking-wider block">Coat Colour</span>
-                <span className="font-bold text-xs text-[#25242A] mt-1 block">{selectedPet.coatColour || 'Not noted'}</span>
-              </div>
-              <div className="p-3 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl">
-                <span className="text-[10px] text-[#737780] font-bold uppercase tracking-wider block">Date of Birth</span>
-                <span className="font-bold text-xs text-[#25242A] mt-1 block">{selectedPet.dob || 'Not noted'}</span>
-              </div>
-              <div className="p-3 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl">
-                <span className="text-[10px] text-[#737780] font-bold uppercase tracking-wider block">Species</span>
-                <span className="font-bold text-xs text-[#25242A] mt-1 block">{selectedPet.species}</span>
-              </div>
-              <div className="p-3 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl">
-                <span className="text-[10px] text-[#737780] font-bold uppercase tracking-wider block">Status</span>
-                <span className="font-bold text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md inline-block mt-1">
-                  {selectedPet.status}
-                </span>
-              </div>
-            </div>
-
-            {/* Owner Contact Card */}
-            <div className="p-4 bg-white border border-[#E8ECF0] rounded-2xl space-y-2">
-              <h4 className="text-xs font-extrabold text-[#737780] uppercase tracking-wider">Owner / Guardian Information</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                <div className="flex items-center gap-2">
-                  <User className="w-4 h-4 text-[#7567E8] shrink-0" />
-                  <div>
-                    <p className="text-[10px] text-[#737780]">Full Name</p>
-                    <p className="text-xs font-bold text-[#25242A]">{selectedPet.ownerName}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Phone className="w-4 h-4 text-[#7567E8] shrink-0" />
-                  <div>
-                    <p className="text-[10px] text-[#737780]">Contact Number</p>
-                    <p className="text-xs font-bold text-[#25242A]">{selectedPet.contactNumber || 'Not provided'}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-[#7567E8] shrink-0" />
-                  <div>
-                    <p className="text-[10px] text-[#737780]">Residential Address</p>
-                    <p className="text-xs font-bold text-[#25242A] truncate" title={selectedPet.ownerAddress}>
-                      {selectedPet.ownerAddress || 'Not provided'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Veterinary Notes (Read-only for Admin, edited by Doctor) */}
-            <div className="space-y-2">
-              <p className="font-extrabold text-xs text-[#25242A] uppercase tracking-wider">Veterinary Medical Notes</p>
-              <div className="p-4 bg-[#F8FAFC] border border-[#E8ECF0] text-[#25242A] rounded-2xl font-medium leading-relaxed min-h-[70px]">
-                {selectedPet.medicalNotes || (
-                  <span className="text-[#737780] italic">No clinical examination notes recorded yet.</span>
-                )}
-              </div>
-            </div>
-
-            {/* Registration Audit History */}
-            {selectedPet.auditHistory && selectedPet.auditHistory.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-[#E8ECF0]">
-                <div className="flex items-center gap-2">
-                  <History className="w-4 h-4 text-[#737780]" />
-                  <p className="font-extrabold text-xs text-[#737780] uppercase tracking-wider">
-                    Registration Audit History
-                  </p>
-                </div>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                  {selectedPet.auditHistory.map((h, i) => (
-                    <div key={i} className="p-2.5 bg-[#F8FAFC] border border-[#E8ECF0] rounded-xl text-[11px] space-y-0.5">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[#25242A]">
-                          {h.action === 'edit_registration_number' ? 'Registration No. Edited' : 'Initial Registration'}
-                        </span>
-                        <span className="text-[#737780] text-[10px]">
-                          {h.timestamp ? new Date(h.timestamp).toLocaleString() : ''}
-                        </span>
-                      </div>
-                      {h.previousRegistrationNumber && (
-                        <p className="text-[#737780]">
-                          Changed from <strong className="font-mono text-[#E46A6A]">{h.previousRegistrationNumber}</strong> to{' '}
-                          <strong className="font-mono text-[#7567E8]">{h.newRegistrationNumber}</strong>
-                        </p>
-                      )}
-                      {h.reason && <p className="text-[#737780] italic">&ldquo;{h.reason}&rdquo;</p>}
-                      <p className="text-[10px] text-[#737780]">
-                        By: <strong className="text-[#25242A]">{h.updatedByName || h.updatedByRole || 'Staff'}</strong>
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+        onOpenEditReg={(pet) => setEditingPet(pet)}
+        isDoctor={false}
+      />
 
       {/* Edit Registration Number Modal */}
-      <Modal
-        isOpen={!!editingPet}
+      <EditRegistrationModal
+        pet={editingPet}
         onClose={() => setEditingPet(null)}
-        title="Edit Pet Registration Number"
-        maxWidth="md"
-      >
-        {editingPet && (
-          <div className="space-y-4 text-xs text-[#25242A]">
-            <div className="p-3 bg-[#F1EEFF] border border-[#7567E8]/40 rounded-xl">
-              <p className="text-xs font-bold text-[#7567E8]">Authorized Clinic Admin Workflow</p>
-              <p className="text-[11px] text-[#737780] mt-0.5">
-                Modifying this number requires validation against duplicate entries within this business and writes an immutable audit record.
-              </p>
-            </div>
-
-            <div>
-              <label className="font-bold text-xs text-[#25242A] block mb-1">Pet Patient</label>
-              <p className="text-xs text-[#737780] font-semibold">{editingPet.name} ({editingPet.breed} • Owner: {editingPet.ownerName})</p>
-            </div>
-
-            <div>
-              <label className="font-bold text-xs text-[#25242A] block mb-1">Current Registration Number</label>
-              <span className="font-mono text-xs font-black bg-[#F8FAFC] px-3 py-1.5 rounded-lg border border-[#E8ECF0] inline-block text-[#737780]">
-                {editingPet.registrationNumber}
-              </span>
-            </div>
-
-            <div>
-              <label className="font-bold text-xs text-[#25242A] block mb-1">New Registration Number *</label>
-              <input
-                type="text"
-                value={newRegNumber}
-                onChange={(e) => setNewRegNumber(e.target.value)}
-                placeholder="e.g. HPPC/P/01-A"
-                className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-mono font-bold text-[#25242A] focus:outline-none uppercase"
-              />
-            </div>
-
-            <div>
-              <label className="font-bold text-xs text-[#25242A] block mb-1">Audit Reason for Change *</label>
-              <textarea
-                value={editReason}
-                onChange={(e) => setEditReason(e.target.value)}
-                rows={2}
-                placeholder="Specify clinical or clerical reason for correction (e.g. Corrected certificate typo)..."
-                className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl p-3 text-xs text-[#25242A] focus:outline-none"
-              />
-            </div>
-
-            {updateError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-600 font-semibold text-xs">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{updateError}</span>
-              </div>
-            )}
-
-            {updateSuccess && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-emerald-700 font-semibold text-xs">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>{updateSuccess}</span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setEditingPet(null)}
-                disabled={isUpdatingReg}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleSaveRegNumber}
-                isLoading={isUpdatingReg}
-              >
-                Save &amp; Log Audit
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+        onSuccess={(updated) => {
+          if (selectedPet && selectedPet.id === updated.id) {
+            setSelectedPet(updated);
+          }
+        }}
+      />
     </div>
   );
 }

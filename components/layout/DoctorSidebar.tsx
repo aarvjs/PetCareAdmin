@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
   X,
+  Boxes,
   Stethoscope,
 } from 'lucide-react';
 
@@ -39,6 +40,7 @@ export const DoctorSidebar: React.FC<DoctorSidebarProps> = ({ isOpen = false, on
     { name: 'Appointments', href: '/doctor/appointments', icon: <Calendar className="w-5 h-5" /> },
     { name: 'Patients / Pets', href: '/doctor/patients', icon: <Dog className="w-5 h-5" /> },
     { name: 'Clinic Services', href: '/doctor/services', icon: <Sparkles className="w-5 h-5" /> },
+    { name: 'Medicine Inventory', href: '/doctor/inventory', icon: <Boxes className="w-5 h-5" /> },
     { name: 'Vaccinations', href: '/doctor/vaccinations', icon: <Syringe className="w-5 h-5" /> },
     { name: 'Medical Records', href: '/doctor/medical-records', icon: <FileText className="w-5 h-5" /> },
     { name: 'Profile', href: '/doctor/profile', icon: <User className="w-5 h-5" /> },
