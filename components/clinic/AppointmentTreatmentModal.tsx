@@ -313,8 +313,8 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
       } else {
         setSuccessMessage(data.message || 'Treatment successfully recorded!');
         setSavedTreatment(data.treatment || payload);
-        if (data.petId) {
-          appointment.petId = data.petId;
+        if ((data as any).petId) {
+          appointment.petId = (data as any).petId;
         }
         if (data.treatment?.petRegistrationNumber) {
           appointment.petRegistrationNumber = data.treatment.petRegistrationNumber;
