@@ -23,11 +23,13 @@ import {
   FileText,
   Printer,
   ChevronRight,
+  Plus,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { AppointmentTreatmentModal } from '@/components/clinic/AppointmentTreatmentModal';
+import { BookWalkInAppointmentModal } from '@/components/clinic/BookWalkInAppointmentModal';
 import { safeFetchJson } from '@/lib/safeFetch';
 
 export interface DoctorAppointment {
@@ -64,6 +66,8 @@ export interface DoctorAppointment {
   treatmentId?: string;
   rejectionReason?: string;
   cancelReason?: string;
+  isWalkIn?: boolean;
+  isUnclaimed?: boolean;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -80,6 +84,7 @@ export default function DoctorAppointmentsPage() {
   // Modals
   const [selectedAppointment, setSelectedAppointment] = useState<DoctorAppointment | null>(null);
   const [treatmentModalApt, setTreatmentModalApt] = useState<DoctorAppointment | null>(null);
+  const [isWalkInModalOpen, setIsWalkInModalOpen] = useState(false);
 
   // Rejection Dialog State
   const [rejectingApt, setRejectingApt] = useState<DoctorAppointment | null>(null);
@@ -268,6 +273,15 @@ export default function DoctorAppointmentsPage() {
       <PageHeader
         title="Veterinary Appointments & Consultations"
         subtitle="Review booking requests, examine patients, administer treatments, and generate official prescriptions."
+        action={
+          <Button
+            onClick={() => setIsWalkInModalOpen(true)}
+            icon={<Plus className="w-4 h-4" />}
+            className="bg-[#0284C7] hover:bg-[#0369A1] text-white font-bold shadow-sm"
+          >
+            + Book Appointment
+          </Button>
+        }
       />
 
       {/* Filter Tabs & Search Bar */}
@@ -371,11 +385,16 @@ export default function DoctorAppointmentsPage() {
                       }`}
                     >
                       <td className="py-3 px-4 font-mono font-bold text-[#0284C7]">
-                        <div className="flex items-center gap-1.5">
-                          {aptId}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{aptId}</span>
                           {isToday && (
                             <span className="text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold uppercase">
                               Today
+                            </span>
+                          )}
+                          {apt.isWalkIn && (
+                            <span className="text-[9px] bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded font-bold uppercase">
+                              Walk-in
                             </span>
                           )}
                         </div>
@@ -664,6 +683,11 @@ export default function DoctorAppointmentsPage() {
           </div>
         </Modal>
       )}
+      {/* Book Appointment Modal for Walk-in Patient */}
+      <BookWalkInAppointmentModal
+        isOpen={isWalkInModalOpen}
+        onClose={() => setIsWalkInModalOpen(false)}
+      />
     </div>
   );
 }

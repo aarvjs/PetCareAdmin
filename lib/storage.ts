@@ -93,6 +93,13 @@ export function getServiceImageStoragePath(businessId: string, serviceId: string
   return `businesses/${cleanBiz}/services/${cleanSer}_${Date.now()}_${cleanName}`;
 }
 
+export function getPetPhotoStoragePath(businessId: string, petId: string, fileName: string): string {
+  const cleanBiz = businessId ? businessId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const cleanPet = petId ? petId.replace(/[^a-zA-Z0-9_-]/g, '') : 'pet';
+  const cleanName = sanitizeFileName(fileName);
+  return `businesses/${cleanBiz}/pets/${cleanPet}/${Date.now()}_${cleanName}`;
+}
+
 /**
  * Upload a file directly to Firebase Storage with progress tracking.
  */
