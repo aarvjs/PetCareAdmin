@@ -1155,7 +1155,13 @@ export async function isRequestAuthorizedForClinicStaff(
   token?: string;
 }> {
   const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
-  let requesterUid = body?.requesterUid || body?.updatedByUid || body?.createdBy || request.headers.get('x-user-uid');
+  let requesterUid =
+    body?.requesterUid ||
+    body?.updatedByUid ||
+    body?.createdBy ||
+    body?.callerProfile?.uid ||
+    body?.userProfile?.uid ||
+    request.headers.get('x-user-uid');
   let token = '';
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -1193,9 +1199,10 @@ export async function isRequestAuthorizedForClinicStaff(
     } catch (e) {}
   }
 
-  if (!profile && token) {
+  if (!profile) {
     try {
-      profile = await fetchFirestoreDocRest('users', requesterUid, token);
+      const serverTok = token || (await getServerIdToken());
+      profile = await fetchFirestoreDocRest('users', requesterUid, serverTok || undefined);
     } catch (e) {}
   }
 

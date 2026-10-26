@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/authContext';
 import {
   LayoutDashboard,
   Calendar,
+  Clock,
   Dog,
   Sparkles,
   Syringe,
@@ -38,6 +39,7 @@ export const DoctorSidebar: React.FC<DoctorSidebarProps> = ({ isOpen = false, on
   const navItems = [
     { name: 'Dashboard', href: '/doctor/dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
     { name: 'Appointments', href: '/doctor/appointments', icon: <Calendar className="w-5 h-5" /> },
+    { name: 'Schedule & Availability', href: '/doctor/schedule', icon: <Clock className="w-5 h-5" /> },
     { name: 'Patients / Pets', href: '/doctor/patients', icon: <Dog className="w-5 h-5" /> },
     { name: 'Clinic Services', href: '/doctor/services', icon: <Sparkles className="w-5 h-5" /> },
     { name: 'Medicine Inventory', href: '/doctor/inventory', icon: <Boxes className="w-5 h-5" /> },

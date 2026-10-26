@@ -157,6 +157,12 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || isAdmin();
     }
 
+    // ---------- DOCTOR SCHEDULES ----------
+    match /doctor_schedules/{doctorId} {
+      allow read: if true;
+      allow write: if isStaff() || (signedIn() && request.auth.uid == doctorId);
+    }
+
     // ---------- SERVICES ----------
     match /services/{serviceId} {
       allow read: if true;
@@ -181,7 +187,10 @@ service cloud.firestore {
         );
 
       allow create: if signedIn()
-        && request.resource.data.userId == request.auth.uid;
+        && (
+          request.resource.data.userId == request.auth.uid
+          || isStaff()
+        );
 
       allow update: if isAdmin()
         || isSuperAdmin()
