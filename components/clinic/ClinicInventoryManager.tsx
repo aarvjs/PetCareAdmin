@@ -103,15 +103,14 @@ export const ClinicInventoryManager: React.FC<ClinicInventoryManagerProps> = ({ 
   const fetchInventory = useCallback(async () => {
     try {
       const idToken = user ? await user.getIdToken() : '';
-      const res = await fetch('/api/clinic/inventory', {
+      const { ok, data } = await safeFetchJson<any>('/api/clinic/inventory', {
         headers: {
           'Content-Type': 'application/json',
           'x-user-uid': profile?.uid || user?.uid || '',
           ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
         },
       });
-      const data = await res.json();
-      if (data.success && Array.isArray(data.items)) {
+      if (ok && data?.success && Array.isArray(data.items)) {
         setItems(data.items);
       }
     } catch (e) {

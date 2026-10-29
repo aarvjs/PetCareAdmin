@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { DEFAULT_WEEKLY_SCHEDULE, DaySchedule, BreakPeriod } from '@/lib/clinicSchedule';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 export default function DoctorSchedulePage() {
   const { profile, user, business } = useAuth();
@@ -50,15 +51,17 @@ export default function DoctorSchedulePage() {
       setIsLoading(true);
       try {
         const idToken = user ? await user.getIdToken() : '';
-        const res = await fetch(`/api/clinic/schedule?doctorId=${docUid}&shopId=${currentShopId}`, {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-user-uid': docUid,
-            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-          },
-        });
-        const data = await res.json();
-        if (data.success) {
+        const { ok, data, error } = await safeFetchJson<any>(
+          `/api/clinic/schedule?doctorId=${encodeURIComponent(docUid)}&shopId=${encodeURIComponent(currentShopId)}`,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-uid': docUid,
+              ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+            },
+          }
+        );
+        if (ok && data?.success) {
           if (Array.isArray(data.weeklySchedule)) {
             const savedMap = new Map(data.weeklySchedule.map((d: any) => [d.dayOfWeek, d]));
             const merged = DEFAULT_WEEKLY_SCHEDULE.map((defDay) => {
@@ -70,9 +73,11 @@ export default function DoctorSchedulePage() {
           if (Array.isArray(data.blockedDates)) {
             setBlockedDates(data.blockedDates);
           }
+        } else if (error) {
+          console.warn('[Doctor Schedule Load Notice]', error);
         }
       } catch (err: any) {
-        console.warn('[Doctor Schedule Load Notice]', err.message);
+        console.warn('[Doctor Schedule Load Notice]', err?.message || 'Failed to fetch schedule');
       } finally {
         setIsLoading(false);
       }
@@ -88,11 +93,16 @@ export default function DoctorSchedulePage() {
     const fetchPreviewSlots = async () => {
       setIsLoadingPreview(true);
       try {
-        const res = await fetch(
-          `/api/clinic/schedule?doctorId=${docUid}&shopId=${currentShopId}&date=${previewDate}`
+        const idToken = user ? await user.getIdToken() : '';
+        const { ok, data } = await safeFetchJson<any>(
+          `/api/clinic/schedule?doctorId=${encodeURIComponent(docUid)}&shopId=${encodeURIComponent(currentShopId)}&date=${encodeURIComponent(previewDate)}`,
+          {
+            headers: {
+              ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+            },
+          }
         );
-        const data = await res.json();
-        if (data.success && Array.isArray(data.availableSlots)) {
+        if (ok && data?.success && Array.isArray(data.availableSlots)) {
           setPreviewSlots(data.availableSlots);
         } else {
           setPreviewSlots([]);
@@ -189,7 +199,7 @@ export default function DoctorSchedulePage() {
 
     try {
       const idToken = user ? await user.getIdToken() : '';
-      const res = await fetch('/api/clinic/schedule', {
+      const { ok, data, error } = await safeFetchJson<any>('/api/clinic/schedule', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -205,15 +215,14 @@ export default function DoctorSchedulePage() {
         }),
       });
 
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to save schedule.');
+      if (!ok || !data?.success) {
+        throw new Error(error || data?.error || 'Failed to save schedule.');
       }
 
       setSuccessMessage('Weekly availability & consultation hours successfully saved!');
       setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err: any) {
-      setErrorMessage(err.message || 'An error occurred while saving.');
+      setErrorMessage(err?.message || 'An error occurred while saving.');
     } finally {
       setIsSaving(false);
     }

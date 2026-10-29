@@ -24,6 +24,7 @@ import {
 import { collection, onSnapshot, query, where, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/lib/authContext';
+import { safeFetchJson } from '@/lib/safeFetch';
 import { RecordTreatmentModal } from './RecordTreatmentModal';
 
 export interface PetDetailsModalPet {
@@ -129,9 +130,8 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
 
     const loadTreatments = async () => {
       try {
-        const res = await fetch(`/api/clinic/treatments?petId=${pet.id}`);
-        const data = await res.json();
-        if (data.success && Array.isArray(data.treatments)) {
+        const { ok, data } = await safeFetchJson<any>(`/api/clinic/treatments?petId=${pet.id}`);
+        if (ok && data?.success && Array.isArray(data.treatments)) {
           setTreatments(data.treatments);
         }
       } catch (_) {}

@@ -7,23 +7,15 @@ import {
   setFirestoreDocRest,
   fetchFirestoreCollectionRest,
 } from '@/lib/firebaseAdmin';
-
-export {
-  type BreakPeriod,
-  type DaySchedule,
-  DEFAULT_WEEKLY_SCHEDULE,
-  timeToMinutes,
-  minutesToTimeString,
-  generateSlotsForDay,
-} from '@/lib/clinicSchedule';
 import {
-  type BreakPeriod,
   type DaySchedule,
   DEFAULT_WEEKLY_SCHEDULE,
   timeToMinutes,
-  minutesToTimeString,
   generateSlotsForDay,
 } from '@/lib/clinicSchedule';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /**
  * GET /api/clinic/schedule
@@ -35,32 +27,70 @@ import {
  */
 export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+    const callerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
+
     const { searchParams } = new URL(request.url);
-    const doctorId = searchParams.get('doctorId');
-    const businessId = searchParams.get('businessId');
-    const shopId = searchParams.get('shopId');
-    const dateStr = searchParams.get('date'); // "YYYY-MM-DD"
+    const doctorId = searchParams.get('doctorId')?.trim();
+    const businessId = searchParams.get('businessId')?.trim();
+    const shopId = searchParams.get('shopId')?.trim();
+    const dateStr = searchParams.get('date')?.trim(); // "YYYY-MM-DD"
 
     // 1. Locate Doctor
     let doctor: any = null;
     if (doctorId) {
       if (hasServiceAccount() && adminDb) {
-        const snap = await adminDb.collection('doctors').doc(doctorId).get();
-        if (snap.exists) doctor = { id: snap.id, ...snap.data() };
+        let snap = await adminDb.collection('doctors').doc(doctorId).get();
+        if (snap.exists) {
+          doctor = { id: snap.id, ...snap.data() };
+        } else {
+          snap = await adminDb.collection('users').doc(doctorId).get();
+          if (snap.exists) doctor = { id: snap.id, ...snap.data() };
+        }
       }
       if (!doctor) {
-        doctor = await fetchFirestoreDocRest('doctors', doctorId);
+        doctor = await fetchFirestoreDocRest('doctors', doctorId, callerToken);
+      }
+      if (!doctor) {
+        doctor = await fetchFirestoreDocRest('users', doctorId, callerToken);
       }
     }
 
-    // Fallback: If no doctorId, look for first active doctor in business/shop
+    // Fallback: If no doctorId or not found by id, look for active doctor in business/shop
     if (!doctor && (businessId || shopId)) {
-      const allDoctors = await fetchFirestoreCollectionRest('doctors');
-      doctor = allDoctors.find((d: any) => {
-        const matchShop = shopId && d.shopId === shopId;
-        const matchBiz = businessId && d.businessId === businessId;
-        return (matchShop || matchBiz) && d.status !== 'inactive';
-      });
+      if (hasServiceAccount() && adminDb) {
+        let q: any = adminDb.collection('doctors');
+        if (businessId) q = q.where('businessId', '==', businessId);
+        else if (shopId) q = q.where('shopId', '==', shopId);
+        const dSnap = await q.limit(1).get();
+        if (!dSnap.empty) {
+          doctor = { id: dSnap.docs[0].id, ...dSnap.docs[0].data() };
+        } else {
+          const uSnap = await adminDb.collection('users').where('role', '==', 'doctor').get();
+          const match = uSnap.docs.find((d: any) => {
+            const data = d.data();
+            const matchShop = shopId && data.shopId && data.shopId.toUpperCase() === shopId.toUpperCase();
+            const matchBiz = businessId && data.businessId === businessId;
+            return (matchShop || matchBiz) && data.status !== 'inactive';
+          });
+          if (match) doctor = { id: match.id, ...match.data() };
+        }
+      } else {
+        const allDoctors = await fetchFirestoreCollectionRest('doctors', callerToken);
+        doctor = allDoctors.find((d: any) => {
+          const matchShop = shopId && d.shopId && d.shopId.toUpperCase() === shopId.toUpperCase();
+          const matchBiz = businessId && d.businessId === businessId;
+          return (matchShop || matchBiz) && d.status !== 'inactive';
+        });
+        if (!doctor) {
+          const allUsers = await fetchFirestoreCollectionRest('users', callerToken);
+          doctor = allUsers.find((d: any) => {
+            const matchShop = shopId && d.shopId && d.shopId.toUpperCase() === shopId.toUpperCase();
+            const matchBiz = businessId && d.businessId === businessId;
+            return d.role === 'doctor' && (matchShop || matchBiz) && d.status !== 'inactive';
+          });
+        }
+      }
     }
 
     if (!doctor) {
@@ -74,8 +104,13 @@ export async function GET(request: Request) {
     // 2. Load Doctor Schedule
     let schedule: any = doctor.schedule || null;
     if (!schedule) {
-      const scheduleDoc = await fetchFirestoreDocRest('doctor_schedules', doctor.id);
-      if (scheduleDoc) schedule = scheduleDoc;
+      if (hasServiceAccount() && adminDb) {
+        const sSnap = await adminDb.collection('doctor_schedules').doc(doctor.id).get();
+        if (sSnap.exists) schedule = sSnap.data();
+      } else {
+        const scheduleDoc = await fetchFirestoreDocRest('doctor_schedules', doctor.id, callerToken);
+        if (scheduleDoc) schedule = scheduleDoc;
+      }
     }
 
     const savedDaysMap = new Map<string, any>(
@@ -123,13 +158,18 @@ export async function GET(request: Request) {
       if (isWorkingDay && dayConfig) {
         // Fetch existing appointments for doctor on this date
         let existingAppointments: any[] = [];
-        const allAppointments = await fetchFirestoreCollectionRest('appointments');
-        existingAppointments = allAppointments.filter((a: any) => {
-          const matchDoctor = a.doctorId === doctor.id || !a.doctorId;
-          const matchDate = a.appointmentDate === dateStr || a.date === dateStr;
-          const notCancelled = a.status !== 'Cancelled' && a.status !== 'cancelled' && a.status !== 'Rejected' && a.status !== 'rejected';
-          return matchDoctor && matchDate && notCancelled;
-        });
+        if (hasServiceAccount() && adminDb) {
+          const snap = await adminDb.collection('appointments').where('appointmentDate', '==', dateStr).get();
+          existingAppointments = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+        } else {
+          const allAppointments = await fetchFirestoreCollectionRest('appointments', callerToken);
+          existingAppointments = allAppointments.filter((a: any) => {
+            const matchDoctor = a.doctorId === doctor.id || !a.doctorId;
+            const matchDate = (a.appointmentDate || a.date) === dateStr;
+            const notCancelled = a.status !== 'Cancelled' && a.status !== 'cancelled' && a.status !== 'Rejected' && a.status !== 'rejected';
+            return matchDoctor && matchDate && notCancelled;
+          });
+        }
 
         availableSlots = generateSlotsForDay(dayConfig, existingAppointments, dateStr);
       }
@@ -250,28 +290,35 @@ export async function POST(request: Request) {
       updatedAt: nowIso,
     };
 
-    // 1. Primary write to doctors/{targetDocId}
-    await setFirestoreDocRest('doctors', targetDocId, {
+    const docUpdatePayload = {
       schedule: scheduleData,
       weeklySchedule,
       blockedDates: scheduleData.blockedDates,
       slotDurationMinutes: scheduleData.slotDurationMinutes,
       availability: `Mon - Sat (${weeklySchedule[0]?.startTime || '10:00 AM'} - ${weeklySchedule[0]?.endTime || '08:00 PM'})`,
       updatedAt: nowIso,
-    }, authCheck.token);
+    };
 
-    // 2. Sync to users/{targetDocId}
-    try {
-      await setFirestoreDocRest('users', targetDocId, {
-        schedule: scheduleData,
-        updatedAt: nowIso,
-      }, authCheck.token);
-    } catch (_) {}
-
-    // 3. Attempt write to doctor_schedules collection
-    try {
-      await setFirestoreDocRest('doctor_schedules', targetDocId, scheduleData, authCheck.token);
-    } catch (_) {}
+    if (hasServiceAccount() && adminDb) {
+      await adminDb.collection('doctors').doc(targetDocId).set(docUpdatePayload, { merge: true });
+      try {
+        await adminDb.collection('users').doc(targetDocId).set({ schedule: scheduleData, updatedAt: nowIso }, { merge: true });
+      } catch (_) {}
+      try {
+        await adminDb.collection('doctor_schedules').doc(targetDocId).set(scheduleData, { merge: true });
+      } catch (_) {}
+    } else {
+      await setFirestoreDocRest('doctors', targetDocId, docUpdatePayload, authCheck.token);
+      try {
+        await setFirestoreDocRest('users', targetDocId, {
+          schedule: scheduleData,
+          updatedAt: nowIso,
+        }, authCheck.token);
+      } catch (_) {}
+      try {
+        await setFirestoreDocRest('doctor_schedules', targetDocId, scheduleData, authCheck.token);
+      } catch (_) {}
+    }
 
     return NextResponse.json({
       success: true,

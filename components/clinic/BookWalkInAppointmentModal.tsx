@@ -141,19 +141,34 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
   // 1. Fetch next expected Pet Registration Number from API
   useEffect(() => {
     if (!isOpen) return;
-    fetch(`/api/pets/next-reg-number?businessId=${encodeURIComponent(targetBizId)}&shopId=${encodeURIComponent(targetShopId)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data?.success) {
-          const pref = data.prefix || 'HPPC/P/';
-          setRegPrefix(pref);
-          if (!regNumber) {
-            setRegNumber(data.nextRegistrationNumber || `${pref}01`);
-          }
+    const fetchRegNumber = async () => {
+      let authToken: string | undefined = undefined;
+      if (user) {
+        try {
+          authToken = await user.getIdToken();
+        } catch {
+          // ignore
         }
-      })
-      .catch((err) => console.warn('[Walk-in Modal] Reg number preview warning:', err));
-  }, [isOpen, targetBizId, targetShopId]);
+      }
+      const { ok, data } = await safeFetchJson<any>(
+        `/api/pets/next-reg-number?businessId=${encodeURIComponent(targetBizId)}&shopId=${encodeURIComponent(targetShopId)}`,
+        {
+          headers: {
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
+        }
+      );
+      if (ok && data?.success) {
+        const pref = data.prefix || 'HPPC/P/';
+        setRegPrefix(pref);
+        if (!regNumber) {
+          setRegNumber(data.nextRegistrationNumber || `${pref}01`);
+        }
+      }
+    };
+
+    fetchRegNumber().catch((err) => console.warn('[Walk-in Modal] Reg number preview warning:', err));
+  }, [isOpen, targetBizId, targetShopId, user]);
 
   // 2. Load active services live from Firestore
   useEffect(() => {
@@ -197,18 +212,28 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
   useEffect(() => {
     if (!isOpen) return;
     setIsLoadingInventory(true);
-    fetch('/api/clinic/inventory', {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-uid': profile?.uid || user?.uid || '',
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data?.success && Array.isArray(data.items)) {
-          setInventoryList(data.items);
+    const fetchInventory = async () => {
+      let authToken: string | undefined = undefined;
+      if (user) {
+        try {
+          authToken = await user.getIdToken();
+        } catch {
+          // ignore
         }
-      })
+      }
+      const { ok, data } = await safeFetchJson<any>('/api/clinic/inventory', {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-uid': profile?.uid || user?.uid || '',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+      });
+      if (ok && data?.success && Array.isArray(data.items)) {
+        setInventoryList(data.items);
+      }
+    };
+
+    fetchInventory()
       .catch((err) => console.warn('[Walk-in Modal] Inventory load warning:', err))
       .finally(() => setIsLoadingInventory(false));
   }, [isOpen, profile, user]);

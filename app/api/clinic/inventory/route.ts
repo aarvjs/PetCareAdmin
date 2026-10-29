@@ -2,20 +2,13 @@ import { NextResponse } from 'next/server';
 import {
   adminDb,
   hasServiceAccount,
-  getServerAuthenticatedDb,
   isRequestAuthorizedForClinicStaff,
   setFirestoreDocRest,
   fetchFirestoreCollectionRest,
 } from '@/lib/firebaseAdmin';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  setDoc,
-  orderBy,
-} from 'firebase/firestore';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /**
  * GET /api/clinic/inventory
@@ -111,7 +104,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // Sort by name or updatedAt
+    // Sort by name
     items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     return NextResponse.json({
@@ -177,8 +170,8 @@ export async function POST(request: Request) {
     const parsedThreshold = parseInt(lowStockThreshold, 10);
     const threshold = !isNaN(parsedThreshold) && parsedThreshold >= 0 ? parsedThreshold : 5;
 
-    const assignedBizId = authCheck.businessId || 'biz_1791736912551_weqjk8';
-    const assignedShopId = authCheck.shopId || 'SHOP-D9E8';
+    const assignedBizId = authCheck.businessId || body.businessId || '';
+    const assignedShopId = authCheck.shopId || body.shopId || '';
 
     const timestamp = Date.now();
     const itemId = `med_${timestamp}_${Math.random().toString(36).substring(2, 7)}`;
@@ -231,9 +224,9 @@ export async function POST(request: Request) {
         });
       }
     } else {
-      await setFirestoreDocRest('inventory', itemId, inventoryItem);
+      await setFirestoreDocRest('inventory', itemId, inventoryItem, authCheck.token);
       try {
-        await setFirestoreDocRest('clinic_inventory', itemId, inventoryItem);
+        await setFirestoreDocRest('clinic_inventory', itemId, inventoryItem, authCheck.token);
       } catch (_) {}
 
       if (parsedStock > 0) {
@@ -254,7 +247,7 @@ export async function POST(request: Request) {
             actorName: authCheck.fullName,
             actorRole: authCheck.role,
             timestamp: nowIso,
-          });
+          }, authCheck.token);
         } catch (_) {}
       }
     }

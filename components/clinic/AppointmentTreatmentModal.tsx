@@ -168,18 +168,28 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
 
     // Load clinic inventory
     setIsLoadingInventory(true);
-    fetch('/api/clinic/inventory', {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-uid': profile?.uid || user?.uid || '',
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && Array.isArray(data.items)) {
-          setInventoryList(data.items);
+    const fetchInventory = async () => {
+      let authToken: string | undefined = undefined;
+      if (user) {
+        try {
+          authToken = await user.getIdToken();
+        } catch {
+          // ignore
         }
-      })
+      }
+      const { ok, data } = await safeFetchJson<any>('/api/clinic/inventory', {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-uid': profile?.uid || user?.uid || '',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+      });
+      if (ok && data?.success && Array.isArray(data.items)) {
+        setInventoryList(data.items);
+      }
+    };
+
+    fetchInventory()
       .catch((err) => console.warn('Failed to load inventory:', err))
       .finally(() => setIsLoadingInventory(false));
   }, [isOpen, appointment, profile, user]);

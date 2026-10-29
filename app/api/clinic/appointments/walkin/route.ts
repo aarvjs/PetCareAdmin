@@ -59,8 +59,8 @@ export async function POST(request: Request) {
       concernCategory = 'General Consultation',
       symptoms = '',
       notes = '',
-      shopId = 'SHOP-D9E8',
-      businessId = 'biz_1791736912551_weqjk8',
+      shopId,
+      businessId,
     } = body;
 
     // 1. Validation of essential booking fields
@@ -87,17 +87,38 @@ export async function POST(request: Request) {
     }
 
     // 2. Canonical Business Resolution
-    let canonicalShopId = (shopId || 'SHOP-D9E8').trim();
-    let canonicalBizId = (businessId || 'biz_1791736912551_weqjk8').trim();
+    let canonicalShopId = (shopId || '').trim();
+    let canonicalBizId = (businessId || '').trim();
     let canonicalBizName = 'Healthy Paws Pet Clinic';
 
-    try {
-      const bizDoc = await fetchFirestoreDocRest('businesses', canonicalBizId, callerToken);
-      if (bizDoc) {
-        canonicalBizName = bizDoc.name || canonicalBizName;
-        canonicalShopId = bizDoc.shopId || canonicalShopId;
-      }
-    } catch (_) {}
+    if (canonicalBizId) {
+      try {
+        const bizDoc = await fetchFirestoreDocRest('businesses', canonicalBizId, callerToken);
+        if (bizDoc) {
+          canonicalBizName = bizDoc.name || canonicalBizName;
+          canonicalShopId = bizDoc.shopId || canonicalShopId;
+        }
+      } catch (_) {}
+    } else if (canonicalShopId) {
+      try {
+        const bDoc = await queryFirestoreByFieldRest('businesses', 'shopId', canonicalShopId, callerToken);
+        if (bDoc) {
+          canonicalBizId = bDoc.id || canonicalBizId;
+          canonicalBizName = bDoc.name || canonicalBizName;
+        }
+      } catch (_) {}
+    }
+
+    if (!canonicalBizId && !canonicalShopId) {
+      try {
+        const allBiz = await fetchFirestoreCollectionRest('businesses', callerToken);
+        if (allBiz.length > 0) {
+          canonicalBizId = allBiz[0].id || '';
+          canonicalShopId = allBiz[0].shopId || '';
+          canonicalBizName = allBiz[0].name || canonicalBizName;
+        }
+      } catch (_) {}
+    }
 
     // 3. Check if matching registered user account exists in `users`
     let existingUser: any = null;

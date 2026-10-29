@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Printer, Download, ArrowLeft, Loader2 } from 'lucide-react';
+import { safeFetchJson } from '@/lib/safeFetch';
 
 interface PrescriptionDetails {
   appointmentId: string;
@@ -50,12 +51,11 @@ export default function AppointmentPrescriptionPrintPage() {
     const fetchPrescription = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`/api/clinic/appointments/${appointmentId}/prescription?format=json`);
-        const json = await res.json();
-        if (!res.ok || !json.success) {
-          throw new Error(json.error || 'Failed to load prescription.');
+        const { ok, data, error: fetchErr } = await safeFetchJson<any>(`/api/clinic/appointments/${appointmentId}/prescription?format=json`);
+        if (!ok || !data?.success) {
+          throw new Error(fetchErr || data?.error || 'Failed to load prescription.');
         }
-        setPrescription(json.prescription);
+        setPrescription(data.prescription);
       } catch (err: any) {
         setError(err.message || 'Error loading prescription.');
       } finally {

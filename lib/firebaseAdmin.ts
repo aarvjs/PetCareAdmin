@@ -44,12 +44,56 @@ function getAdminApp(): App | null {
     return getAdminApps()[0]!;
   }
 
+  // 1. Support full service account JSON if provided in environment variables
+  const rawServiceAccountJson =
+    process.env.FIREBASE_SERVICE_ACCOUNT ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+
+  if (rawServiceAccountJson && rawServiceAccountJson.trim()) {
+    try {
+      let jsonStr = rawServiceAccountJson.trim();
+      if (!jsonStr.startsWith('{')) {
+        try {
+          const decoded = Buffer.from(jsonStr, 'base64').toString('utf-8');
+          if (decoded.trim().startsWith('{')) {
+            jsonStr = decoded.trim();
+          }
+        } catch (_) {}
+      }
+      const sa = JSON.parse(jsonStr);
+      if (sa.client_email && sa.private_key) {
+        let pk = String(sa.private_key).replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+        const app = initAdminApp({
+          credential: cert({
+            projectId: sa.project_id || process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'pet-clinic-47727',
+            clientEmail: sa.client_email,
+            privateKey: pk,
+          }),
+        });
+        isServiceAccountInitialized = true;
+        return app;
+      }
+    } catch (e) {
+      console.warn('[Firebase Admin] Service account JSON parse warning:', e);
+    }
+  }
+
+  // 2. Support individual environment variables
   const projectId =
     process.env.FIREBASE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
     'pet-clinic-47727';
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
-  const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+  const clientEmail = (
+    process.env.FIREBASE_CLIENT_EMAIL ||
+    process.env.FIREBASE_ADMIN_CLIENT_EMAIL ||
+    process.env.GOOGLE_CLIENT_EMAIL
+  )?.trim();
+  const rawPrivateKey =
+    process.env.FIREBASE_PRIVATE_KEY ||
+    process.env.FIREBASE_ADMIN_PRIVATE_KEY ||
+    process.env.GOOGLE_PRIVATE_KEY;
 
   if (clientEmail && rawPrivateKey) {
     try {
@@ -60,6 +104,15 @@ function getAdminApp(): App | null {
         (privateKey.startsWith("'") && privateKey.endsWith("'"))
       ) {
         privateKey = privateKey.slice(1, -1);
+      }
+      // Check if base64 encoded
+      if (!privateKey.includes('-----BEGIN') && !privateKey.includes('\n')) {
+        try {
+          const decoded = Buffer.from(privateKey, 'base64').toString('utf-8');
+          if (decoded.includes('-----BEGIN')) {
+            privateKey = decoded;
+          }
+        } catch (_) {}
       }
       // Normalize escaped newlines and carriage returns
       privateKey = privateKey.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
@@ -1229,41 +1282,46 @@ export async function isRequestAuthorizedForClinicStaff(
   }
 
   let profile: any = null;
+  const serverTok = token || (await getServerIdToken());
 
   if (hasServiceAccount() && adminDb) {
     try {
       const snap = await adminDb.collection('users').doc(requesterUid).get();
       if (snap.exists) profile = snap.data();
     } catch (e) {}
+    if (!profile) {
+      try {
+        const dSnap = await adminDb.collection('doctors').doc(requesterUid).get();
+        if (dSnap.exists) profile = { role: 'doctor', ...dSnap.data() };
+      } catch (e) {}
+    }
   }
 
   if (!profile) {
     try {
-      const serverTok = token || (await getServerIdToken());
       profile = await fetchFirestoreDocRest('users', requesterUid, serverTok || undefined);
     } catch (e) {}
   }
 
   if (!profile) {
     try {
-      const clientDb = await getServerAuthenticatedDb();
-      const snap = await getDoc(doc(clientDb, 'users', requesterUid));
-      if (snap.exists()) profile = snap.data();
+      const dDoc = await fetchFirestoreDocRest('doctors', requesterUid, serverTok || undefined);
+      if (dDoc) profile = { role: 'doctor', ...dDoc };
     } catch (e) {}
   }
 
   if (!profile) {
-    if (hasServiceAccount() && adminDb) {
-      try {
-        const dSnap = await adminDb.collection('doctors').doc(requesterUid).get();
-        if (dSnap.exists) profile = { role: 'doctor', ...dSnap.data() };
-      } catch (e) {}
-    } else {
-      try {
-        const dDoc = await fetchFirestoreDocRest('doctors', requesterUid, token);
-        if (dDoc) profile = { role: 'doctor', ...dDoc };
-      } catch (e) {}
-    }
+    try {
+      const uDoc = await queryFirestoreByFieldRest('users', 'uid', requesterUid, serverTok || undefined);
+      if (uDoc) profile = uDoc;
+    } catch (e) {}
+  }
+
+  if (!profile) {
+    try {
+      const dDoc = await queryFirestoreByFieldRest('doctors', 'uid', requesterUid, serverTok || undefined);
+      if (dDoc) profile = { role: 'doctor', ...dDoc };
+    } catch (e) {}
   }
 
   if (!profile && (body?.userProfile || body?.callerProfile) && ((body?.userProfile?.uid || body?.callerProfile?.uid) === requesterUid)) {
@@ -1280,14 +1338,20 @@ export async function isRequestAuthorizedForClinicStaff(
 
   const role = profile.role;
 
+  const xShopId = (request.headers.get('x-shop-id') || request.headers.get('shopId') || body?.shopId || '').trim();
+  const xBizId = (request.headers.get('x-business-id') || request.headers.get('businessId') || body?.businessId || '').trim();
+
+  const resolvedShopId = profile.shopId || xShopId;
+  const resolvedBizId = profile.businessId || xBizId;
+
   if (role === 'super_admin') {
     return {
       authorized: true,
       role: 'super_admin',
       user: profile,
       uid: requesterUid,
-      shopId: profile.shopId || '',
-      businessId: profile.businessId || '',
+      shopId: resolvedShopId,
+      businessId: resolvedBizId,
       fullName: body?.callerProfile?.fullName || profile.fullName || 'Super Administrator',
       token: token || undefined,
     };
@@ -1299,8 +1363,8 @@ export async function isRequestAuthorizedForClinicStaff(
       role: 'doctor',
       user: profile,
       uid: requesterUid,
-      shopId: profile.shopId || '',
-      businessId: profile.businessId || '',
+      shopId: resolvedShopId,
+      businessId: resolvedBizId,
       fullName: body?.callerProfile?.fullName || profile.fullName || 'Doctor',
       token: token || undefined,
     };
@@ -1328,8 +1392,8 @@ export async function isRequestAuthorizedForClinicStaff(
       role: 'admin',
       user: profile,
       uid: requesterUid,
-      shopId: profile.shopId || '',
-      businessId: profile.businessId || '',
+      shopId: resolvedShopId,
+      businessId: resolvedBizId,
       fullName: body?.callerProfile?.fullName || profile.fullName || 'Clinic Administrator',
       token: token || undefined,
     };
