@@ -23,10 +23,18 @@ import {
   Building2,
   User,
   Dog,
+  History,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { safeFetchJson } from '@/lib/safeFetch';
 import { ClinicMedicineItem } from './ClinicInventoryManager';
+import {
+  calculateVaccineDoseSchedule,
+  getVaccineHistoryForPet,
+  isVaccineItem,
+  VACCINE_BRAND_OPTIONS,
+  DOSE_OPTIONS,
+} from '@/lib/vaccineSchedule';
 
 export interface AdministeredMedItem {
   medicineId: string;
@@ -37,6 +45,13 @@ export interface AdministeredMedItem {
   unit: string;
   charge: string;
   batchNumber?: string;
+  category?: string;
+  vaccineBrand?: string;
+  doseNumber?: string;
+  totalDoses?: number | null;
+  dosesRemaining?: number | null;
+  nextDueDate?: string | null;
+  scheduleStatus?: string;
 }
 
 export interface PrescribedMedItem {
@@ -231,9 +246,25 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
       const found = inventoryList.find((m) => m.id === val);
       if (found) {
         updated[idx].name = found.name;
+        updated[idx].category = found.category;
         updated[idx].unit = found.unit || 'unit';
         updated[idx].batchNumber = found.batchNumber;
         updated[idx].dosage = `1 ${found.unit || 'unit'}`;
+
+        if (isVaccineItem(found.category, found.name)) {
+          const schedule = calculateVaccineDoseSchedule({
+            vaccineName: found.name,
+            petSpecies: appointment?.petType || appointment?.species || 'Dog',
+            historicalDoses: [],
+          });
+          updated[idx].route = 'SC';
+          updated[idx].vaccineBrand = schedule.suggestedBrand;
+          updated[idx].doseNumber = schedule.suggestedDoseNumber;
+          updated[idx].totalDoses = schedule.totalDoses;
+          updated[idx].dosesRemaining = schedule.dosesRemaining;
+          updated[idx].nextDueDate = schedule.suggestedNextDueDate;
+          updated[idx].scheduleStatus = schedule.scheduleStatus;
+        }
       }
     }
     setAdministeredItems(updated);
@@ -612,6 +643,54 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
+
+                      {/* Vaccine Dose Tracking Sub-bar */}
+                      {isVaccineItem(item.category, item.name) && (
+                        <div className="col-span-12 mt-1 pt-2 border-t border-purple-100 flex flex-wrap items-center gap-2 bg-purple-50/60 p-2 rounded-lg text-xs">
+                          <span className="font-bold text-purple-800 text-[10px] flex items-center gap-1">
+                            <Syringe className="w-3 h-3 text-purple-600" />
+                            Vaccine Dose Tracking:
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-gray-500 font-semibold">Dose:</span>
+                            <select
+                              value={item.doseNumber || 'Dose 1'}
+                              onChange={(e) => handleAdministeredChange(idx, 'doseNumber', e.target.value)}
+                              className="bg-white border border-gray-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-purple-800"
+                            >
+                              {DOSE_OPTIONS.map((d) => (
+                                <option key={d} value={d}>
+                                  {d}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-gray-500 font-semibold">Brand:</span>
+                            <input
+                              type="text"
+                              value={item.vaccineBrand || ''}
+                              onChange={(e) => handleAdministeredChange(idx, 'vaccineBrand', e.target.value)}
+                              placeholder="e.g. Nobivac"
+                              className="bg-white border border-gray-200 rounded px-1.5 py-0.5 text-[11px] w-24"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-gray-500 font-semibold">Next Due:</span>
+                            <input
+                              type="date"
+                              value={item.nextDueDate || ''}
+                              onChange={(e) => handleAdministeredChange(idx, 'nextDueDate', e.target.value)}
+                              className="bg-white border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"
+                            />
+                          </div>
+                          {item.dosesRemaining !== undefined && item.dosesRemaining !== null && (
+                            <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800">
+                              {item.dosesRemaining === 0 ? 'Series Complete' : `${item.dosesRemaining} doses remaining`}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -946,11 +1025,23 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
 
                     {/* Administered Injections */}
                     {administeredItems.length > 0 && (
-                      <div className="space-y-1 text-xs font-sans">
+                      <div className="space-y-1.5 text-xs font-sans">
                         {administeredItems.map((item, idx) => (
-                          <p key={idx} className="font-semibold text-slate-900">
-                            Inj. {item.name || 'Medicine'} {item.dosage || ''} {item.route || 'IM'}
-                          </p>
+                          <div key={idx} className="text-slate-900">
+                            <p className="font-semibold">
+                              Inj. {item.name || 'Medicine'} {item.dosage || ''} {item.route || 'IM'}
+                            </p>
+                            {isVaccineItem(item.category, item.name) && (
+                              <p className="text-[10px] text-purple-700 font-medium pl-3">
+                                Vaccine: {item.doseNumber || 'Administered'}
+                                {item.vaccineBrand ? ` (${item.vaccineBrand})` : ''}
+                                {item.nextDueDate ? ` • Next Due: ${item.nextDueDate}` : ''}
+                                {item.dosesRemaining !== null && item.dosesRemaining !== undefined
+                                  ? ` • ${item.dosesRemaining === 0 ? 'Series Complete' : `${item.dosesRemaining} doses remaining`}`
+                                  : ''}
+                              </p>
+                            )}
+                          </div>
                         ))}
                       </div>
                     )}

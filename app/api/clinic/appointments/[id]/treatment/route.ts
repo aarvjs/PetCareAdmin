@@ -5,10 +5,13 @@ import {
   fetchFirestoreDocRest,
   setFirestoreDocRest,
   commitFirestoreBatchRest,
-  getServerAuthenticatedDb,
   isRequestAuthorizedForClinicStaff,
   fetchFirestoreCollectionRest,
 } from '@/lib/firebaseAdmin';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 /**
  * POST /api/clinic/appointments/[id]/treatment
@@ -378,6 +381,14 @@ export async function POST(
         const existingTreatments = Array.isArray(petDoc.treatments) ? [...petDoc.treatments] : [];
         // Remove any previous draft entry with same treatmentId
         const filtered = existingTreatments.filter((t: any) => t.id !== treatmentId);
+
+        const administeredVaccines = (treatmentRecord.administeredItems || []).filter((item: any) => {
+          const cat = (item.category || '').toLowerCase();
+          const nm = (item.name || '').toLowerCase();
+          return cat.includes('vaccin') || nm.includes('vaccin') || nm.includes('9 in 1') || nm.includes('7 in 1') || nm.includes('rabies');
+        });
+        const latestVac = administeredVaccines[0];
+
         filtered.unshift({
           id: treatmentId,
           appointmentId: targetAptDocId,
@@ -385,18 +396,38 @@ export async function POST(
           doctorName: treatmentRecord.doctorName,
           administeredAt: nowIso,
           consultationDate: treatmentRecord.consultationDate,
-          nextDueDate: nextVisitDate,
+          nextDueDate: latestVac?.nextDueDate || nextVisitDate,
           totalAmount: treatmentRecord.totalAmount,
+          administeredItems: treatmentRecord.administeredItems,
+          prescribedItems: treatmentRecord.prescribedItems,
+          ...(latestVac ? {
+            vaccineName: latestVac.name,
+            vaccineBrand: latestVac.vaccineBrand || '',
+            doseNumber: latestVac.doseNumber || 'Booster',
+            totalDoses: latestVac.totalDoses || null,
+            dosesRemaining: latestVac.dosesRemaining || null,
+            scheduleStatus: latestVac.scheduleStatus || 'Booster due',
+          } : {}),
           treatment: treatmentRecord,
         });
 
-        const updatedPet = {
+        const updatedPet: Record<string, any> = {
           ...petDoc,
           treatments: filtered,
           lastVisitDate: treatmentRecord.consultationDate,
           nextDueDate: nextVisitDate || petDoc.nextDueDate,
           updatedAt: nowIso,
         };
+
+        if (latestVac) {
+          updatedPet.lastVaccinationAt = nowIso;
+          updatedPet.lastVaccineName = latestVac.name;
+          updatedPet.lastVaccineDose = latestVac.doseNumber || 'Booster';
+          if (latestVac.nextDueDate) {
+            updatedPet.nextVaccinationDue = latestVac.nextDueDate;
+          }
+        }
+
         await setFirestoreDocRest('pets', effectivePetId, updatedPet, authCheck.token);
       }
     } catch (petSyncErr) {

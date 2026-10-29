@@ -180,13 +180,18 @@ export const ClinicInventoryManager: React.FC<ClinicInventoryManagerProps> = ({ 
 
   // 2. Filter & Search Logic
   const filtered = items.filter((item) => {
+    const itemCat = (item?.category || '').toLowerCase();
+    const itemName = (item?.name || '').toLowerCase();
+    const itemBatch = (item?.batchNumber || '').toLowerCase();
+    const search = (searchTerm || '').toLowerCase();
+
     const matchesCategory =
-      selectedCategory === 'All' || item.category.toLowerCase() === selectedCategory.toLowerCase();
+      selectedCategory === 'All' || itemCat === selectedCategory.toLowerCase();
 
     const matchesSearch =
-      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (item.batchNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchTerm.toLowerCase());
+      itemName.includes(search) ||
+      itemBatch.includes(search) ||
+      itemCat.includes(search);
 
     return matchesCategory && matchesSearch;
   });
@@ -207,7 +212,7 @@ export const ClinicInventoryManager: React.FC<ClinicInventoryManagerProps> = ({ 
   const totalItemsCount = items.length;
   const lowStockCount = items.filter((i) => i.stockQuantity > 0 && i.stockQuantity <= i.lowStockThreshold).length;
   const outOfStockCount = items.filter((i) => i.stockQuantity <= 0).length;
-  const vaccinesCount = items.filter((i) => i.category.toLowerCase() === 'vaccine').length;
+  const vaccinesCount = items.filter((i) => (i?.category || '').toLowerCase() === 'vaccine').length;
 
   // 3. Handle Add New Medicine
   const handleCreateMedicine = async (e: React.FormEvent) => {

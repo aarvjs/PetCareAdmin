@@ -2,22 +2,16 @@ import { NextResponse } from 'next/server';
 import {
   adminDb,
   hasServiceAccount,
-  getServerAuthenticatedDb,
   isRequestAuthorizedForClinicStaff,
   fetchFirestoreDocRest,
   setFirestoreDocRest,
   commitFirestoreBatchRest,
+  fetchFirestoreCollectionRest,
 } from '@/lib/firebaseAdmin';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  getDoc,
-  runTransaction,
-  orderBy,
-} from 'firebase/firestore';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 /**
  * GET /api/clinic/treatments
@@ -54,10 +48,8 @@ export async function GET(request: Request) {
         treatments = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
       } else {
         try {
-          const clientDb = await getServerAuthenticatedDb();
-          const q = query(collection(clientDb, 'treatments'), where('petId', '==', petId));
-          const snap = await getDocs(q);
-          treatments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const allTreatments = await fetchFirestoreCollectionRest('treatments');
+          treatments = allTreatments.filter((t) => t.petId === petId);
         } catch (_) {}
       }
     }
@@ -268,6 +260,14 @@ export async function POST(request: Request) {
           notes: notes ? notes.trim() : '',
           idempotencyKey: trimmedKey,
           stockMovementId: movementId,
+          // Vaccination Dose Tracking Fields
+          vaccineBrand: body.vaccineBrand ? String(body.vaccineBrand).trim() : '',
+          doseNumber: body.doseNumber ? String(body.doseNumber).trim() : (isVaccine ? 'Dose 1' : ''),
+          totalDoses: typeof body.totalDoses === 'number' ? body.totalDoses : null,
+          dosesAdministered: typeof body.dosesAdministered === 'number' ? body.dosesAdministered : (isVaccine ? 1 : 0),
+          dosesRemaining: typeof body.dosesRemaining === 'number' ? body.dosesRemaining : null,
+          scheduleStatus: body.scheduleStatus ? String(body.scheduleStatus).trim() : (isVaccine ? 'Series in progress' : ''),
+          appointmentId: body.appointmentId ? String(body.appointmentId).trim() : null,
           createdAt: nowIso,
         };
 
@@ -307,6 +307,11 @@ export async function POST(request: Request) {
         };
         if (isVaccine) {
           petUpdates.lastVaccinationAt = adminDateIso;
+          petUpdates.lastVaccineName = medData.name;
+          petUpdates.lastVaccineDose = treatmentRecord.doseNumber;
+          if (nextDueDate) {
+            petUpdates.nextVaccinationDue = nextDueDate.trim();
+          }
         }
         transaction.update(petRef, petUpdates);
 
@@ -396,6 +401,14 @@ export async function POST(request: Request) {
         notes: notes ? notes.trim() : '',
         idempotencyKey: trimmedKey,
         stockMovementId: movementId,
+        // Vaccination Dose Tracking Fields
+        vaccineBrand: body.vaccineBrand ? String(body.vaccineBrand).trim() : '',
+        doseNumber: body.doseNumber ? String(body.doseNumber).trim() : (isVaccine ? 'Dose 1' : ''),
+        totalDoses: typeof body.totalDoses === 'number' ? body.totalDoses : null,
+        dosesAdministered: typeof body.dosesAdministered === 'number' ? body.dosesAdministered : (isVaccine ? 1 : 0),
+        dosesRemaining: typeof body.dosesRemaining === 'number' ? body.dosesRemaining : null,
+        scheduleStatus: body.scheduleStatus ? String(body.scheduleStatus).trim() : (isVaccine ? 'Series in progress' : ''),
+        appointmentId: body.appointmentId ? String(body.appointmentId).trim() : null,
         createdAt: nowIso,
       };
 
@@ -430,6 +443,11 @@ export async function POST(request: Request) {
       };
       if (isVaccine) {
         updatedPetData.lastVaccinationAt = adminDateIso;
+        updatedPetData.lastVaccineName = medData.name;
+        updatedPetData.lastVaccineDose = treatmentRecord.doseNumber;
+        if (nextDueDate) {
+          updatedPetData.nextVaccinationDue = nextDueDate.trim();
+        }
       }
 
       // Execute atomic batch commit on guaranteed Firestore collections

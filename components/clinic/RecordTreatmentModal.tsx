@@ -167,7 +167,7 @@ export const RecordTreatmentModal: React.FC<RecordTreatmentModalProps> = ({
   const selectedMedicine = medicines.find((m) => m.id === selectedMedId);
   const availableStock = selectedMedicine ? selectedMedicine.stockQuantity : 0;
   const unit = selectedMedicine ? selectedMedicine.unit : 'unit';
-  const isVaccine = selectedMedicine?.category.toLowerCase() === 'vaccine';
+  const isVaccine = (selectedMedicine?.category || '').toLowerCase() === 'vaccine';
 
   const requestedQty = parseFloat(quantity) || 0;
   const isOutOfStock = availableStock <= 0;

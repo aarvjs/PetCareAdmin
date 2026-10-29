@@ -78,6 +78,11 @@ export interface PetTreatmentRecord {
   nextDueDate?: string | null;
   notes?: string;
   createdAt?: string;
+  vaccineBrand?: string;
+  doseNumber?: string;
+  totalDoses?: number | null;
+  dosesRemaining?: number | null;
+  scheduleStatus?: string;
 }
 
 interface PetDetailsModalProps {
@@ -478,6 +483,25 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
 
                         {/* Booster Badge & Batch Number */}
                         <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-[#E8ECF0]">
+                          {t.doseNumber && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200">
+                              {t.doseNumber}
+                              {t.totalDoses ? ` of ${t.totalDoses}` : ''}
+                            </span>
+                          )}
+
+                          {t.vaccineBrand && (
+                            <span className="text-[10px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                              Brand: {t.vaccineBrand}
+                            </span>
+                          )}
+
+                          {t.dosesRemaining !== null && t.dosesRemaining !== undefined && (
+                            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                              {t.dosesRemaining === 0 ? 'Series Complete' : `${t.dosesRemaining} remaining`}
+                            </span>
+                          )}
+
                           {booster && (
                             <span
                               className={`text-[10px] font-extrabold px-2 py-0.5 rounded-lg border ${booster.color} flex items-center gap-1`}

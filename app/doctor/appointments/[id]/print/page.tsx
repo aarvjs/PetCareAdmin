@@ -26,7 +26,16 @@ interface PrescriptionDetails {
   clinicalSigns?: string;
   prognosis?: string;
   diagnosis?: string;
-  administeredItems?: Array<{ name?: string; dosage?: string; route?: string }>;
+  administeredItems?: Array<{
+    name?: string;
+    dosage?: string;
+    route?: string;
+    category?: string;
+    vaccineBrand?: string;
+    doseNumber?: string;
+    nextDueDate?: string;
+    dosesRemaining?: number | null;
+  }>;
   prescribedItems?: Array<{ name?: string; dosage?: string; instructions?: string }>;
   advice?: string;
   nextVisitDate?: string;
@@ -288,9 +297,21 @@ export default function AppointmentPrescriptionPrintPage() {
               {administeredItems.length > 0 && (
                 <div className="space-y-1.5 text-xs sm:text-sm font-sans">
                   {administeredItems.map((item, idx) => (
-                    <p key={idx} className="font-semibold text-slate-900">
-                      Inj. {item.name || 'Medicine'} {item.dosage || ''} {item.route || 'IM'}
-                    </p>
+                    <div key={idx} className="text-slate-900">
+                      <p className="font-semibold">
+                        Inj. {item.name || 'Medicine'} {item.dosage || ''} {item.route || 'IM'}
+                      </p>
+                      {item.doseNumber && (
+                        <p className="text-[11px] text-purple-800 font-medium pl-3">
+                          Vaccine: {item.doseNumber}
+                          {item.vaccineBrand ? ` (${item.vaccineBrand})` : ''}
+                          {item.nextDueDate ? ` • Next Due: ${item.nextDueDate}` : ''}
+                          {item.dosesRemaining !== null && item.dosesRemaining !== undefined
+                            ? ` • ${item.dosesRemaining === 0 ? 'Series Complete' : `${item.dosesRemaining} doses remaining`}`
+                            : ''}
+                        </p>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
