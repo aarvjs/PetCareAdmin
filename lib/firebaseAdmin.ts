@@ -1,151 +1,146 @@
-import { initializeApp as initAdminApp, getApps as getAdminApps, cert } from 'firebase-admin/app';
+// Pure Serverless / Vercel-Safe Firebase Integration
+// When service account credentials are not provided in environment variables,
+// we NEVER require 'firebase-admin' or 'firebase/firestore' at module load time.
+// This prevents serverless Lambda crashes (cold start 500 errors).
+
 import type { App } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import type { Auth } from 'firebase-admin/auth';
-import { getFirestore as getAdminDb } from 'firebase-admin/firestore';
 import type { Firestore } from 'firebase-admin/firestore';
 
-import { initializeApp as initializeClientApp, getApps as getClientApps } from 'firebase/app';
-import { getAuth as getClientAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword } from 'firebase/auth';
-import { getFirestore as getClientFirestore, doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+let _adminApp: App | null = null;
+let _adminAuth: Auth | null = null;
+let _adminDb: Firestore | null = null;
+let _isServiceAccountInitialized = false;
 
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "pet-clinic-47727.firebaseapp.com",
-  projectId: process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "pet-clinic-47727",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "pet-clinic-47727.firebasestorage.app",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "282276411469",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:282276411469:web:f60fb2a15945f49b238404",
-};
+function initAdminIfCredentialsExist() {
+  if (_isServiceAccountInitialized) return;
 
-export function getSharedClientFirestore() {
-  const existingApps = getClientApps();
-  const app = existingApps.length > 0 ? existingApps[0] : initializeClientApp(firebaseConfig);
-  return getClientFirestore(app);
-}
-
-export async function getServerAuthenticatedDb() {
-  const existingApps = getClientApps();
-  const app =
-    existingApps.find((a) => a.name === 'ServerAuthDbApp') ||
-    initializeClientApp(firebaseConfig, 'ServerAuthDbApp');
-
-  return getClientFirestore(app);
-}
-
-let isServiceAccountInitialized = false;
-
-/**
- * Singleton Firebase Admin App initialization.
- * Handles multiline private keys, quotes, and whitespace safely for Vercel and local environments.
- */
-function getAdminApp(): App | null {
-  if (getAdminApps().length > 0) {
-    return getAdminApps()[0]!;
-  }
-
-  // 1. Support full service account JSON if provided in environment variables
   const rawServiceAccountJson =
     process.env.FIREBASE_SERVICE_ACCOUNT ||
     process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
     process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
 
-  if (rawServiceAccountJson && rawServiceAccountJson.trim()) {
-    try {
-      let jsonStr = rawServiceAccountJson.trim();
-      if (!jsonStr.startsWith('{')) {
-        try {
-          const decoded = Buffer.from(jsonStr, 'base64').toString('utf-8');
-          if (decoded.trim().startsWith('{')) {
-            jsonStr = decoded.trim();
-          }
-        } catch (_) {}
-      }
-      const sa = JSON.parse(jsonStr);
-      if (sa.client_email && sa.private_key) {
-        let pk = String(sa.private_key).replace(/\\n/g, '\n').replace(/\r/g, '').trim();
-        const app = initAdminApp({
-          credential: cert({
-            projectId: sa.project_id || process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'pet-clinic-47727',
-            clientEmail: sa.client_email,
-            privateKey: pk,
-          }),
-        });
-        isServiceAccountInitialized = true;
-        return app;
-      }
-    } catch (e) {
-      console.warn('[Firebase Admin] Service account JSON parse warning:', e);
-    }
-  }
-
-  // 2. Support individual environment variables
   const projectId =
     process.env.FIREBASE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
     process.env.GOOGLE_CLOUD_PROJECT ||
     'pet-clinic-47727';
+
   const clientEmail = (
     process.env.FIREBASE_CLIENT_EMAIL ||
     process.env.FIREBASE_ADMIN_CLIENT_EMAIL ||
     process.env.GOOGLE_CLIENT_EMAIL
   )?.trim();
+
   const rawPrivateKey =
     process.env.FIREBASE_PRIVATE_KEY ||
     process.env.FIREBASE_ADMIN_PRIVATE_KEY ||
     process.env.GOOGLE_PRIVATE_KEY;
 
-  if (clientEmail && rawPrivateKey) {
-    try {
+  if (!rawServiceAccountJson && (!clientEmail || !rawPrivateKey)) {
+    // Zero credentials in environment: running in serverless REST mode safely
+    return;
+  }
+
+  try {
+    const { initializeApp: initAdminApp, getApps: getAdminApps, cert } = require('firebase-admin/app');
+    const { getAuth: getAdminAuth } = require('firebase-admin/auth');
+    const { getFirestore: getAdminDb } = require('firebase-admin/firestore');
+
+    if (getAdminApps().length > 0) {
+      _adminApp = getAdminApps()[0];
+      _adminAuth = getAdminAuth(_adminApp);
+      _adminDb = getAdminDb(_adminApp);
+      _isServiceAccountInitialized = true;
+      return;
+    }
+
+    if (rawServiceAccountJson && rawServiceAccountJson.trim()) {
+      let jsonStr = rawServiceAccountJson.trim();
+      if (!jsonStr.startsWith('{')) {
+        try {
+          const decoded = Buffer.from(jsonStr, 'base64').toString('utf-8');
+          if (decoded.trim().startsWith('{')) jsonStr = decoded.trim();
+        } catch (_) {}
+      }
+      const sa = JSON.parse(jsonStr);
+      if (sa.client_email && sa.private_key) {
+        let pk = String(sa.private_key).replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+        _adminApp = initAdminApp({
+          credential: cert({
+            projectId: sa.project_id || projectId,
+            clientEmail: sa.client_email,
+            privateKey: pk,
+          }),
+        });
+        _adminAuth = getAdminAuth(_adminApp);
+        _adminDb = getAdminDb(_adminApp);
+        _isServiceAccountInitialized = true;
+        return;
+      }
+    }
+
+    if (clientEmail && rawPrivateKey) {
       let privateKey = rawPrivateKey.trim();
-      // Strip surrounding quotes if pasted with quotes into Vercel environment variables
       if (
         (privateKey.startsWith('"') && privateKey.endsWith('"')) ||
         (privateKey.startsWith("'") && privateKey.endsWith("'"))
       ) {
         privateKey = privateKey.slice(1, -1);
       }
-      // Check if base64 encoded
       if (!privateKey.includes('-----BEGIN') && !privateKey.includes('\n')) {
         try {
           const decoded = Buffer.from(privateKey, 'base64').toString('utf-8');
-          if (decoded.includes('-----BEGIN')) {
-            privateKey = decoded;
-          }
+          if (decoded.includes('-----BEGIN')) privateKey = decoded;
         } catch (_) {}
       }
-      // Normalize escaped newlines and carriage returns
       privateKey = privateKey.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
 
-      const app = initAdminApp({
+      _adminApp = initAdminApp({
         credential: cert({
           projectId,
           clientEmail,
           privateKey,
         }),
       });
-      isServiceAccountInitialized = true;
-      return app;
-    } catch (e) {
-      console.warn('[Firebase Admin] cert init warning:', e);
-      isServiceAccountInitialized = false;
+      _adminAuth = getAdminAuth(_adminApp);
+      _adminDb = getAdminDb(_adminApp);
+      _isServiceAccountInitialized = true;
     }
+  } catch (e) {
+    console.warn('[Firebase Admin dynamic init warning]:', e);
   }
+}
 
-  // Do NOT initialize an unauthenticated adminApp without credentials.
-  // In serverless environments (Vercel), an app without credentials attempts GCP metadata lookups
-  // that fail and throw unhandled gRPC rejection errors, crashing the process with HTTP 500.
+export function hasServiceAccount(): boolean {
+  initAdminIfCredentialsExist();
+  return _isServiceAccountInitialized;
+}
+
+export const adminAuth: Auth | null = new Proxy({} as any, {
+  get(target, prop) {
+    initAdminIfCredentialsExist();
+    if (!_adminAuth) return undefined;
+    const val = (_adminAuth as any)[prop];
+    return typeof val === 'function' ? val.bind(_adminAuth) : val;
+  }
+});
+
+export const adminDb: Firestore | null = new Proxy({} as any, {
+  get(target, prop) {
+    initAdminIfCredentialsExist();
+    if (!_adminDb) return undefined;
+    const val = (_adminDb as any)[prop];
+    return typeof val === 'function' ? val.bind(_adminDb) : val;
+  }
+});
+
+export function getSharedClientFirestore(): any {
   return null;
 }
 
-const adminApp = getAdminApp();
-
-export const adminAuth: Auth | null = adminApp ? getAdminAuth(adminApp) : null;
-export const adminDb: Firestore | null = adminApp ? getAdminDb(adminApp) : null;
-
-// Check if Admin SDK has valid service account keys successfully configured
-export function hasServiceAccount(): boolean {
-  return isServiceAccountInitialized;
+export async function getServerAuthenticatedDb(): Promise<any> {
+  return null;
 }
 
 // ---------- FIRESTORE REST API HELPERS FOR SERVERLESS RUNTIMES ----------
@@ -635,36 +630,34 @@ export async function createServerUserProfile(params: {
       await adminDb.collection('doctors').doc(uid).set(fullUserData, { merge: true });
     }
   } else {
-    const secondaryAppName = `ServerAuthProvisioner_${Date.now()}`;
-    const secondaryApp = initializeClientApp(firebaseConfig, secondaryAppName);
-    const secondaryAuth = getClientAuth(secondaryApp);
-    const secondaryDb = getClientFirestore(secondaryApp);
+    const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+    let userCredToken = '';
 
-    let userCred: any = null;
     try {
-      userCred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
-      uid = userCred.user.uid;
-    } catch (err: any) {
-      if (err.code === 'auth/email-already-in-use') {
-        try {
-          userCred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, userPassword);
-          uid = userCred.user.uid;
+      let authRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password: userPassword, returnSecureToken: true }),
+      });
 
-          // Guard against demoting an existing Super Administrator
-          const existingSnap = await getDoc(doc(secondaryDb, 'users', uid));
-          if (existingSnap.exists() && existingSnap.data()?.role === 'super_admin' && role !== 'super_admin') {
-            throw new Error('This email address is already registered as a Super Administrator and cannot be changed to an Admin.');
-          }
-
-          if (userCred.user) {
-            await updatePassword(userCred.user, userPassword);
-          }
-        } catch (e: any) {
-          throw new Error(e.message || 'This email address is already registered in Firebase Authentication.');
-        }
-      } else {
-        throw err;
+      if (!authRes.ok) {
+        authRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail, password: userPassword, returnSecureToken: true }),
+        });
       }
+
+      if (authRes.ok) {
+        const authData = await authRes.json();
+        uid = authData.localId;
+        userCredToken = authData.idToken;
+      } else {
+        const errJson = await authRes.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || 'Failed to authenticate or create user credentials.');
+      }
+    } catch (e: any) {
+      throw new Error(e.message || 'Firebase Auth user provisioning failed.');
     }
 
     const now = new Date().toISOString();
@@ -685,50 +678,14 @@ export async function createServerUserProfile(params: {
       ...extraData,
     };
 
-    // 1. Direct REST write using the created user's fresh ID token
     try {
-      if (userCred && userCred.user) {
-        const idToken = await userCred.user.getIdToken();
-        const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
-        const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'pet-clinic-47727';
-        const restUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${encodeURIComponent(uid)}?key=${apiKey}`;
-        await fetch(restUrl, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({
-            fields: encodeFirestoreFields(userDocData),
-          }),
-        });
-
-        if (role === 'doctor') {
-          const docUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/doctors/${encodeURIComponent(uid)}?key=${apiKey}`;
-          await fetch(docUrl, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({
-              fields: encodeFirestoreFields(userDocData),
-            }),
-          }).catch(() => {});
-        }
+      await setFirestoreDocRest('users', uid, userDocData, userCredToken);
+      if (role === 'doctor') {
+        await setFirestoreDocRest('doctors', uid, userDocData, userCredToken);
       }
-    } catch (restErr: any) {
-      console.warn('[User Provisioning REST Write Notice]', restErr?.message);
+    } catch (e) {
+      console.warn('[User Doc Provisioning Warning]', e);
     }
-
-    // 2. Client SDK fallback with safety timeout (max 2 seconds)
-
-    try {
-      await Promise.race([
-        setDoc(doc(secondaryDb, 'users', uid), userDocData, { merge: true }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
-      ]);
-    } catch (_) {}
   }
 
   return {
@@ -755,10 +712,8 @@ export async function checkSuperAdminExists(): Promise<boolean> {
   }
 
   try {
-    const secondaryDb = getSharedClientFirestore();
-    const q = query(collection(secondaryDb, 'users'), where('role', '==', 'super_admin'));
-    const snap = await getDocs(q);
-    return !snap.empty;
+    const found = await queryFirestoreByFieldRest('users', 'role', 'super_admin');
+    return Boolean(found);
   } catch (e) {
     return false;
   }
@@ -814,12 +769,10 @@ export async function isRequestAuthorizedAsSuperAdmin(request: Request, body?: a
     }
   }
 
-  // 2. Client SDK Fallback mode
+  // 2. REST Fallback mode
   try {
-    const clientDb = await getServerAuthenticatedDb();
-    const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
-    if (docSnap.exists()) {
-      const data = docSnap.data();
+    const data = await fetchFirestoreDocRest('users', requesterUid);
+    if (data) {
       if (data?.role === 'super_admin' && data?.status !== 'inactive' && data?.status !== 'suspended') {
         return { authorized: true };
       }
@@ -914,12 +867,10 @@ export async function isRequestAuthorizedAsProductAdmin(
     }
   }
 
-  // 2. Client SDK Fallback mode for local dev without Service Account keys
+  // 2. REST Fallback mode for local dev without Service Account keys
   try {
-    const clientDb = await getServerAuthenticatedDb();
-    const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
-    if (docSnap.exists()) {
-      const data = docSnap.data();
+    const data = await fetchFirestoreDocRest('users', requesterUid);
+    if (data) {
       if (data?.status === 'inactive' || data?.status === 'suspended') {
         return { authorized: false, error: 'User account has been deactivated.', status: 403 };
       }
@@ -1015,10 +966,8 @@ export async function isRequestAuthorizedAsClinicAdmin(
   }
 
   try {
-    const clientDb = await getServerAuthenticatedDb();
-    const docSnap = await getDoc(doc(clientDb, 'users', requesterUid));
-    if (docSnap.exists()) {
-      const data = docSnap.data();
+    const data = await fetchFirestoreDocRest('users', requesterUid);
+    if (data) {
       if (data?.status === 'inactive' || data?.status === 'suspended') {
         return { authorized: false, error: 'User account has been deactivated.', status: 403 };
       }
@@ -1118,11 +1067,7 @@ export async function isRequestAuthorizedForDoctorCreation(
 
   if (!adminProfile) {
     try {
-      const clientDb = await getServerAuthenticatedDb();
-      const snap = await getDoc(doc(clientDb, 'users', requesterUid));
-      if (snap.exists()) {
-        adminProfile = snap.data();
-      }
+      adminProfile = await fetchFirestoreDocRest('users', requesterUid);
     } catch (e) {}
   }
 

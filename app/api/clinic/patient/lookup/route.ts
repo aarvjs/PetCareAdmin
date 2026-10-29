@@ -7,6 +7,8 @@ import {
 } from '@/lib/firebaseAdmin';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 /**
  * Normalizes Indian phone numbers to standard format (+91XXXXXXXXXX)

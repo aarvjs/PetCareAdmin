@@ -3,14 +3,18 @@ import {
   adminDb,
   adminAuth,
   hasServiceAccount,
-  getServerAuthenticatedDb,
   fetchFirestoreDocRest,
+  fetchFirestoreCollectionRest,
+  queryFirestoreByFieldRest,
   setFirestoreDocRest,
   getServerIdToken,
   decodeFirestoreDoc,
   encodeFirestoreFields,
 } from '@/lib/firebaseAdmin';
-import { collection, getDocs, doc, setDoc, query, where } from 'firebase/firestore';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 /**
  * GET /api/pets
@@ -64,9 +68,7 @@ export async function GET(request: Request) {
       }
       if (!userProf) {
         try {
-          const clientDb = await getServerAuthenticatedDb();
-          const snap = await import('firebase/firestore').then(({ getDoc, doc }) => getDoc(doc(clientDb, 'users', callerUid!)));
-          if (snap.exists()) userProf = snap.data();
+          userProf = await fetchFirestoreDocRest('users', callerUid);
         } catch (_) {}
       }
       if (!userProf && hasServiceAccount() && adminDb) {
@@ -120,11 +122,9 @@ export async function GET(request: Request) {
       const snap = await q.get();
       pets = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
     } else {
-      // Fallback via Client SDK / REST
-      const clientDb = await getServerAuthenticatedDb();
+      // Fallback via authenticated REST
       try {
-        const snap = await getDocs(collection(clientDb, 'pets'));
-        pets = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        pets = await fetchFirestoreCollectionRest('pets');
 
         // Strict isolation filtering
         if (callerRole === 'customer' || (!callerRole && ownerId)) {
@@ -248,12 +248,10 @@ export async function POST(request: Request) {
       }
     } else {
       try {
-        const clientDb = await getServerAuthenticatedDb();
-        const q = query(collection(clientDb, 'businesses'), where('shopId', '==', shopId));
-        const bSnap = await getDocs(q);
-        if (!bSnap.empty) {
-          businessId = bSnap.docs[0].id;
-          businessData = bSnap.docs[0].data();
+        const bDoc = await queryFirestoreByFieldRest('businesses', 'shopId', shopId);
+        if (bDoc) {
+          businessId = bDoc.id;
+          businessData = bDoc;
         }
       } catch (_) {}
     }

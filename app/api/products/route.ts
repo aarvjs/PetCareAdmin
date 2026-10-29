@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
 import {
   isRequestAuthorizedAsProductAdmin,
   adminDb,
   hasServiceAccount,
-  getSharedClientFirestore,
   fetchFirestoreCollectionRest,
+  setFirestoreDocRest,
 } from '@/lib/firebaseAdmin';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   try {
@@ -36,17 +37,6 @@ export async function GET(request: Request) {
         products = await fetchFirestoreCollectionRest('products');
       } catch (restErr: any) {
         console.warn('[Products GET] REST fetch notice:', restErr?.message);
-      }
-    }
-
-    // 3. Client Web SDK fallback mode
-    if (products.length === 0) {
-      try {
-        const clientDb = getSharedClientFirestore();
-        const snap = await getDocs(collection(clientDb, 'products'));
-        products = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      } catch (e: any) {
-        console.warn('[Products GET] Client SDK query restricted for unauthenticated server fetch:', e.message);
       }
     }
 
@@ -244,17 +234,15 @@ export async function POST(request: Request) {
     };
 
     // 5. Save to Firestore
-    if (adminDb) {
+    if (hasServiceAccount() && adminDb) {
       try {
         await adminDb.collection('products').doc(productId).set(productDoc);
       } catch (adminErr: any) {
-        console.warn('[Products POST] Admin SDK write failed, falling back to Client SDK:', adminErr.message);
-        const clientDb = getSharedClientFirestore();
-        await setDoc(doc(clientDb, 'products', productId), productDoc);
+        console.warn('[Products POST] Admin SDK write failed, falling back to REST:', adminErr.message);
+        await setFirestoreDocRest('products', productId, productDoc);
       }
     } else {
-      const clientDb = getSharedClientFirestore();
-      await setDoc(doc(clientDb, 'products', productId), productDoc);
+      await setFirestoreDocRest('products', productId, productDoc);
     }
 
     return NextResponse.json({

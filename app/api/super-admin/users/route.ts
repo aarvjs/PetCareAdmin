@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     let users: any[] = [];
 
     if (hasServiceAccount() && adminDb) {
-      let q: FirebaseFirestore.Query = adminDb.collection('users');
+      let q: any = adminDb.collection('users');
       if (role && role !== 'all') {
         q = q.where('role', '==', role);
       }
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
         q = q.where('shopId', '==', shopId);
       }
       const snap = await q.get();
-      users = snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
+      users = snap.docs.map((d: any) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
     } else {
       const clientDb = await getServerAuthenticatedDb();
       let q = collection(clientDb, 'users') as any;
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
         q = query(collection(clientDb, 'users'), where('role', '==', role));
       }
       const snap = await getDocs(q);
-      users = snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
+      users = snap.docs.map((d: any) => ({ uid: d.id, ...(d.data() as Record<string, any>) }));
     }
 
     // Filter out business records or malformed documents if collection contains any legacy items
