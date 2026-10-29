@@ -2,13 +2,15 @@ import { NextResponse } from 'next/server';
 import {
   adminDb,
   hasServiceAccount,
-  getServerAuthenticatedDb,
   fetchFirestoreDocRest,
   setFirestoreDocRest,
   fetchFirestoreCollectionRest,
+  queryFirestoreByFieldRest,
   getServerIdToken,
 } from '@/lib/firebaseAdmin';
-import { collection, query, where, getDocs, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
@@ -30,6 +32,9 @@ function normalizePhone(phone: string): string {
  */
 export async function POST(request: Request) {
   try {
+    const authHeader = request.headers.get('authorization');
+    const callerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
+
     const body = await request.json();
     const {
       customerName,
@@ -87,7 +92,7 @@ export async function POST(request: Request) {
     let canonicalBizName = 'Healthy Paws Pet Clinic';
 
     try {
-      const bizDoc = await fetchFirestoreDocRest('businesses', canonicalBizId);
+      const bizDoc = await fetchFirestoreDocRest('businesses', canonicalBizId, callerToken);
       if (bizDoc) {
         canonicalBizName = bizDoc.name || canonicalBizName;
         canonicalShopId = bizDoc.shopId || canonicalShopId;
@@ -111,33 +116,46 @@ export async function POST(request: Request) {
         }
       }
     } else {
-      try {
-        const clientDb = await getServerAuthenticatedDb();
-        for (const p of phoneVariants) {
-          const q = query(collection(clientDb, 'users'), where('phoneNumber', '==', p));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            existingUser = { uid: snap.docs[0].id, ...snap.docs[0].data() };
+      for (const p of phoneVariants) {
+        try {
+          const uDoc = await queryFirestoreByFieldRest('users', 'phoneNumber', p, callerToken);
+          if (uDoc) {
+            existingUser = uDoc;
             break;
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
 
     const isUnclaimed = !existingUser;
     const finalUserId = existingUser ? existingUser.uid : `unclaimed_${normalizedPhone}`;
 
     // 4. Slot Concurrency Check (Prevent double booking before any database writes)
-    const allAppointments = await fetchFirestoreCollectionRest('appointments');
-    const conflict = allAppointments.find((a) => {
-      const sameDate = (a.appointmentDate || a.date) === appointmentDate.trim();
-      const sameTime = (a.appointmentTime || a.time) === appointmentTime.trim();
-      const sameDoctor = !doctorId || !a.doctorId || a.doctorId === doctorId;
-      const isActive = a.status === 'Confirmed' || a.status === 'Pending';
-      return sameDate && sameTime && sameDoctor && isActive;
-    });
+    let hasConflict = false;
+    if (hasServiceAccount() && adminDb) {
+      const snap = await adminDb
+        .collection('appointments')
+        .where('appointmentDate', '==', appointmentDate.trim())
+        .get();
+      hasConflict = snap.docs.some((d) => {
+        const a = d.data();
+        const sameTime = (a.appointmentTime || a.time) === appointmentTime.trim();
+        const sameDoctor = !doctorId || !a.doctorId || a.doctorId === doctorId;
+        const isActive = a.status === 'Confirmed' || a.status === 'Pending';
+        return sameTime && sameDoctor && isActive;
+      });
+    } else {
+      const allAppointments = await fetchFirestoreCollectionRest('appointments', callerToken);
+      hasConflict = allAppointments.some((a) => {
+        const sameDate = (a.appointmentDate || a.date) === appointmentDate.trim();
+        const sameTime = (a.appointmentTime || a.time) === appointmentTime.trim();
+        const sameDoctor = !doctorId || !a.doctorId || a.doctorId === doctorId;
+        const isActive = a.status === 'Confirmed' || a.status === 'Pending';
+        return sameDate && sameTime && sameDoctor && isActive;
+      });
+    }
 
-    if (conflict) {
+    if (hasConflict) {
       return NextResponse.json(
         {
           success: false,
@@ -158,7 +176,7 @@ export async function POST(request: Request) {
         const pSnap = await adminDb.collection('pets').doc(existingPetId).get();
         if (pSnap.exists) petDoc = { id: pSnap.id, ...pSnap.data() };
       } else {
-        petDoc = await fetchFirestoreDocRest('pets', existingPetId);
+        petDoc = await fetchFirestoreDocRest('pets', existingPetId, callerToken);
       }
 
       if (!petDoc) {
@@ -232,7 +250,7 @@ export async function POST(request: Request) {
         } else {
           let lastNumber = 0;
           try {
-            const counterDoc = await fetchFirestoreDocRest('counters', `pets_${canonicalBizId}`);
+            const counterDoc = await fetchFirestoreDocRest('counters', `pets_${canonicalBizId}`, callerToken);
             if (counterDoc && typeof counterDoc.lastNumber === 'number') {
               lastNumber = counterDoc.lastNumber;
             }
@@ -248,7 +266,7 @@ export async function POST(request: Request) {
               prefix,
               lastNumber: nextNumber,
               updatedAt: new Date().toISOString(),
-            });
+            }, callerToken);
           } catch (_) {}
         }
       } else {
@@ -258,7 +276,7 @@ export async function POST(request: Request) {
         if (match) {
           const num = parseInt(match[1], 10);
           try {
-            const counterDoc = await fetchFirestoreDocRest('counters', `pets_${canonicalBizId}`);
+            const counterDoc = await fetchFirestoreDocRest('counters', `pets_${canonicalBizId}`, callerToken);
             const currentLast = (counterDoc && typeof counterDoc.lastNumber === 'number') ? counterDoc.lastNumber : 0;
             if (num > currentLast) {
               await setFirestoreDocRest('counters', `pets_${canonicalBizId}`, {
@@ -267,7 +285,7 @@ export async function POST(request: Request) {
                 prefix,
                 lastNumber: num,
                 updatedAt: new Date().toISOString(),
-              });
+              }, callerToken);
             }
           } catch (_) {}
         }
@@ -306,7 +324,11 @@ export async function POST(request: Request) {
         ],
       };
 
-      await setFirestoreDocRest('pets', newPetId, petPayload);
+      if (hasServiceAccount() && adminDb) {
+        await adminDb.collection('pets').doc(newPetId).set(petPayload);
+      } else {
+        await setFirestoreDocRest('pets', newPetId, petPayload, callerToken);
+      }
       finalPet = petPayload;
     }
 
@@ -327,71 +349,82 @@ export async function POST(request: Request) {
 
     const appointmentPayload = {
       appointmentId: generatedAppointmentId,
-        petId: finalPet.id,
-        petName: finalPet.name,
-        petType: finalPet.species,
-        petRegistrationNumber: finalPet.registrationNumber || '',
-        breed: finalPet.breed || '',
-        age: finalPet.age || '',
-        gender: finalPet.gender || '',
-        userId: finalUserId,
-        customerName: customerName.trim(),
-        ownerName: customerName.trim(),
-        customerPhone: normalizedPhone,
-        ownerPhone: normalizedPhone,
-        customerAddress: customerAddress.trim(),
-        serviceName: serviceName.trim(),
-        servicePrice: effectiveConsultFee,
-        consultationFee: effectiveConsultFee,
-        medicineCharges: effectiveMedCharges,
-        discount: effectiveDiscount,
-        totalAmount: calculatedTotal,
-        paymentStatus: paymentStatus || 'Pending',
-        paymentMethod: paymentMethod || 'Cash',
-        isPaid: paymentStatus === 'Paid',
-        administeredItems: Array.isArray(administeredItems) ? administeredItems : [],
-        vitals: vitals || {},
-        doctorId: doctorId || '',
-        doctorName: doctorName || 'Dr. Ashwani Kumar Singh',
-        shopId: canonicalShopId,
-        businessId: canonicalBizId,
-        businessName: canonicalBizName,
-        appointmentDate: appointmentDate.trim(),
-        appointmentTime: appointmentTime.trim(),
-        concernCategory: concernCategory.trim(),
-        symptoms: (symptoms || '').trim(),
-        notes: (notes || '').trim(),
-        status: 'Confirmed', // Confirmed directly by doctor
-        isWalkIn: true,
-        isUnclaimed,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      petId: finalPet.id,
+      petName: finalPet.name,
+      petType: finalPet.species,
+      petRegistrationNumber: finalPet.registrationNumber || '',
+      breed: finalPet.breed || '',
+      age: finalPet.age || '',
+      gender: finalPet.gender || '',
+      userId: finalUserId,
+      customerName: customerName.trim(),
+      ownerName: customerName.trim(),
+      customerPhone: normalizedPhone,
+      ownerPhone: normalizedPhone,
+      customerAddress: customerAddress.trim(),
+      serviceName: serviceName.trim(),
+      servicePrice: effectiveConsultFee,
+      consultationFee: effectiveConsultFee,
+      medicineCharges: effectiveMedCharges,
+      discount: effectiveDiscount,
+      totalAmount: calculatedTotal,
+      paymentStatus: paymentStatus || 'Pending',
+      paymentMethod: paymentMethod || 'Cash',
+      isPaid: paymentStatus === 'Paid',
+      administeredItems: Array.isArray(administeredItems) ? administeredItems : [],
+      vitals: vitals || {},
+      doctorId: doctorId || '',
+      doctorName: doctorName || 'Dr. Ashwani Kumar Singh',
+      shopId: canonicalShopId,
+      businessId: canonicalBizId,
+      businessName: canonicalBizName,
+      appointmentDate: appointmentDate.trim(),
+      appointmentTime: appointmentTime.trim(),
+      concernCategory: concernCategory.trim(),
+      symptoms: (symptoms || '').trim(),
+      notes: (notes || '').trim(),
+      status: 'Confirmed', // Confirmed directly by doctor
+      isWalkIn: true,
+      isUnclaimed,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-      await setFirestoreDocRest('appointments', docId, appointmentPayload);
+    if (hasServiceAccount() && adminDb) {
+      await adminDb.collection('appointments').doc(docId).set(appointmentPayload);
+    } else {
+      await setFirestoreDocRest('appointments', docId, appointmentPayload, callerToken);
+    }
 
-      // If medicines/injections were administered, also update pet's clinical treatments array
-      if (Array.isArray(administeredItems) && administeredItems.length > 0) {
-        try {
-          const treatmentRecord = {
-            id: `treat_${docId}`,
-            appointmentId: docId,
-            date: appointmentDate.trim(),
-            diagnosis: concernCategory || symptoms || 'Walk-in Consultation',
-            doctorName: doctorName || 'Dr. Ashwani Kumar Singh',
-            administeredItems,
-            totalAmount: calculatedTotal,
-            createdAt: new Date().toISOString(),
-          };
-          const currentTreatments = Array.isArray(finalPet.treatments) ? finalPet.treatments : [];
+    // If medicines/injections were administered, also update pet's clinical treatments array
+    if (Array.isArray(administeredItems) && administeredItems.length > 0) {
+      try {
+        const treatmentRecord = {
+          id: `treat_${docId}`,
+          appointmentId: docId,
+          date: appointmentDate.trim(),
+          diagnosis: concernCategory || symptoms || 'Walk-in Consultation',
+          doctorName: doctorName || 'Dr. Ashwani Kumar Singh',
+          administeredItems,
+          totalAmount: calculatedTotal,
+          createdAt: new Date().toISOString(),
+        };
+        const currentTreatments = Array.isArray(finalPet.treatments) ? finalPet.treatments : [];
+        if (hasServiceAccount() && adminDb) {
+          await adminDb.collection('pets').doc(finalPet.id).set({
+            treatments: [...currentTreatments, treatmentRecord],
+            updatedAt: new Date().toISOString(),
+          }, { merge: true });
+        } else {
           await setFirestoreDocRest('pets', finalPet.id, {
             treatments: [...currentTreatments, treatmentRecord],
             updatedAt: new Date().toISOString(),
-          });
-        } catch (treatErr) {
-          console.warn('[Walk-in Booking] Pet treatment sync warning:', treatErr);
+          }, callerToken);
         }
+      } catch (treatErr) {
+        console.warn('[Walk-in Booking] Pet treatment sync warning:', treatErr);
       }
+    }
 
     return NextResponse.json({
       success: true,

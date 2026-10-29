@@ -3,15 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
 import {
-  Search,
   Plus,
-  Phone,
   User,
-  MapPin,
   Dog,
-  Calendar,
   Clock,
   Sparkles,
   CheckCircle2,
@@ -19,13 +14,8 @@ import {
   UploadCloud,
   Loader2,
   Check,
-  Stethoscope,
-  Syringe,
-  Pill,
   Trash2,
-  IndianRupee,
   Receipt,
-  Tag,
   Hash,
   Edit3,
 } from 'lucide-react';
@@ -285,13 +275,26 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
       setIsLookingUp(true);
       setFormError(null);
       try {
-        const { data, error } = await safeFetchJson<{
+        let authToken: string | undefined = undefined;
+        if (user) {
+          try {
+            authToken = await user.getIdToken();
+          } catch {
+            // ignore
+          }
+        }
+
+        const { data } = await safeFetchJson<{
           success: boolean;
           userExists: boolean;
           user: any;
           pets: ExistingPet[];
           error?: string;
-        }>(`/api/clinic/patient/lookup?phone=${encodeURIComponent(cleanDigits)}&shopId=${encodeURIComponent(targetShopId)}&businessId=${encodeURIComponent(targetBizId)}`);
+        }>(`/api/clinic/patient/lookup?phone=${encodeURIComponent(cleanDigits)}&shopId=${encodeURIComponent(targetShopId)}&businessId=${encodeURIComponent(targetBizId)}`, {
+          headers: {
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
+        });
 
         if (data && data.success) {
           setLookupResult({
@@ -497,6 +500,15 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
         businessId: targetBizId,
       };
 
+      let authToken: string | undefined = undefined;
+      if (user) {
+        try {
+          authToken = await user.getIdToken();
+        } catch {
+          // ignore
+        }
+      }
+
       const { data, error } = await safeFetchJson<{
         success: boolean;
         error?: string;
@@ -505,7 +517,10 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
         conflict?: boolean;
       }>('/api/clinic/appointments/walkin', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify(bookingPayload),
       });
 

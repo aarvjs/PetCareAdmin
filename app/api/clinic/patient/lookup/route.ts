@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import {
   adminDb,
   hasServiceAccount,
-  getServerAuthenticatedDb,
   fetchFirestoreCollectionRest,
+  queryFirestoreByFieldRest,
 } from '@/lib/firebaseAdmin';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+
+export const dynamic = 'force-dynamic';
 
 /**
  * Normalizes Indian phone numbers to standard format (+91XXXXXXXXXX)
@@ -34,6 +35,9 @@ function normalizePhone(phone: string): { standard: string; raw10: string; witho
  */
 export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get('authorization');
+    const callerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
+
     const { searchParams } = new URL(request.url);
     const phone = searchParams.get('phone') || '';
     const businessId = (searchParams.get('businessId') || '').trim();
@@ -64,18 +68,15 @@ export async function GET(request: Request) {
         }
       }
     } else {
-      try {
-        const clientDb = await getServerAuthenticatedDb();
-        for (const p of phoneVariants) {
-          const q = query(collection(clientDb, 'users'), where('phoneNumber', '==', p));
-          const uSnap = await getDocs(q);
-          if (!uSnap.empty) {
-            const doc = uSnap.docs[0];
-            foundUser = { uid: doc.id, ...doc.data() };
+      for (const p of phoneVariants) {
+        try {
+          const uDoc = await queryFirestoreByFieldRest('users', 'phoneNumber', p, callerToken);
+          if (uDoc) {
+            foundUser = uDoc;
             break;
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
 
     // 2. Query pets registered under this owner / phone number for this business
@@ -85,7 +86,7 @@ export async function GET(request: Request) {
       const pSnap = await q.get();
       allPets = pSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
     } else {
-      allPets = await fetchFirestoreCollectionRest('pets');
+      allPets = await fetchFirestoreCollectionRest('pets', callerToken);
     }
 
     // Filter pets matching owner UID or phone variants, strictly isolated to current business

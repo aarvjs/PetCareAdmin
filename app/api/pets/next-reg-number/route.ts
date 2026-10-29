@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
-import { adminDb, hasServiceAccount, getServerAuthenticatedDb, fetchFirestoreDocRest } from '@/lib/firebaseAdmin';
-import { doc, getDoc } from 'firebase/firestore';
+import { adminDb, hasServiceAccount, fetchFirestoreDocRest, queryFirestoreByFieldRest } from '@/lib/firebaseAdmin';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get('authorization');
+    const callerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
+
     const { searchParams } = new URL(request.url);
     const shopId = searchParams.get('shopId');
     const businessIdParam = searchParams.get('businessId');
@@ -19,12 +23,9 @@ export async function GET(request: Request) {
         }
       } else {
         try {
-          const clientDb = await getServerAuthenticatedDb();
-          const { collection, query, where, getDocs } = await import('firebase/firestore');
-          const q = query(collection(clientDb, 'businesses'), where('shopId', '==', shopId));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            businessId = snap.docs[0].id;
+          const bDoc = await queryFirestoreByFieldRest('businesses', 'shopId', shopId, callerToken);
+          if (bDoc) {
+            businessId = bDoc.id;
           }
         } catch (_) {}
       }
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
         const snap = await adminDb.collection('businesses').doc(businessId).get();
         if (snap.exists) bizData = snap.data();
       } else {
-        bizData = await fetchFirestoreDocRest('businesses', businessId);
+        bizData = await fetchFirestoreDocRest('businesses', businessId, callerToken);
       }
       if (bizData && (bizData.petRegistrationPrefix || bizData.settings?.petRegistrationPrefix)) {
         prefix = bizData.petRegistrationPrefix || bizData.settings.petRegistrationPrefix;
@@ -58,10 +59,9 @@ export async function GET(request: Request) {
           lastNumber = cSnap.data()?.lastNumber || 0;
         }
       } else {
-        const clientDb = await getServerAuthenticatedDb();
-        const cSnap = await getDoc(doc(clientDb, 'counters', `pets_${businessId}`));
-        if (cSnap.exists()) {
-          lastNumber = cSnap.data()?.lastNumber || 0;
+        const counterDoc = await fetchFirestoreDocRest('counters', `pets_${businessId}`, callerToken);
+        if (counterDoc && typeof counterDoc.lastNumber === 'number') {
+          lastNumber = counterDoc.lastNumber;
         }
       }
     } catch (_) {}
