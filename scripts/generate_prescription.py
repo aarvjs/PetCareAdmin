@@ -58,7 +58,7 @@ def generate_prescription(data_json_path, template_path, output_docx_path, outpu
         rx_lines.append(line)
 
     if not rx_lines:
-        rx_lines = ['Inj. Oframax 225 mg IM', 'Inj. Lytadine 0.7 ml IM', 'Inj. Krontic - 4 0.4 ml IM']
+        rx_lines = ['No medications prescribed for this visit.']
 
     # Open docx document
     doc = docx.Document(template_path)

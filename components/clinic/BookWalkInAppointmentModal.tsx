@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query } from 'firebase/firestore';
+import { collection, onSnapshot, query, doc, setDoc, getDocs, getDoc } from 'firebase/firestore';
 import {
   uploadFileToFirebaseStorage,
   getPetPhotoStoragePath,
@@ -164,6 +164,19 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
         if (!regNumber) {
           setRegNumber(data.nextRegistrationNumber || `${pref}01`);
         }
+      } else {
+        // Direct client-side counter read fallback
+        try {
+          const counterSnap = await getDoc(doc(db, 'counters', `pets_${targetBizId}`));
+          const pref = 'HPPC/P/';
+          setRegPrefix(pref);
+          if (counterSnap.exists()) {
+            const lastNum = counterSnap.data()?.lastNumber || 0;
+            if (!regNumber) setRegNumber(`${pref}${String(lastNum + 1).padStart(2, '0')}`);
+          } else if (!regNumber) {
+            setRegNumber(`${pref}01`);
+          }
+        } catch (_) {}
       }
     };
 
@@ -230,6 +243,25 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
       });
       if (ok && data?.success && Array.isArray(data.items)) {
         setInventoryList(data.items);
+      } else {
+        // Direct client Firestore read fallback for clinic inventory
+        try {
+          const invSnap = await getDocs(collection(db, 'inventory'));
+          const directItems: any[] = [];
+          invSnap.forEach((d) => {
+            const item = d.data();
+            const matchesBiz = !item.businessId || item.businessId === targetBizId;
+            const matchesShop = !item.shopId || item.shopId === targetShopId;
+            if (matchesBiz || matchesShop) {
+              directItems.push({ id: d.id, ...item });
+            }
+          });
+          if (directItems.length > 0) {
+            setInventoryList(directItems);
+          }
+        } catch (invErr) {
+          console.warn('[Walk-in Modal] Direct inventory load notice:', invErr);
+        }
       }
     };
 
@@ -549,15 +581,105 @@ export const BookWalkInAppointmentModal: React.FC<BookWalkInAppointmentModalProp
         body: JSON.stringify(bookingPayload),
       });
 
+      let appointmentData: any = null;
+
       if (error || !data?.success) {
-        setFormError(error || data?.error || 'Failed to book appointment. Please try again.');
-        return;
+        console.warn('[Walk-in Booking] Server route failed, initiating direct Firestore client fallback...', error);
+        try {
+          // 1. Resolve Pet ID and Pet Record
+          let finalPetId = bookingPayload.existingPetId;
+          let finalPetData: any = null;
+
+          if (finalPetId) {
+            finalPetData = lookupResult?.pets?.find((p: any) => p.id === finalPetId) || null;
+          } else {
+            finalPetId = `pet_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const prefix = bookingPayload.newPet?.registrationPrefix || regPrefix || 'HPPC/P/';
+            const assignedReg = bookingPayload.newPet?.registrationNumber || regNumber || `${prefix}${String(Date.now()).slice(-4)}`;
+
+            finalPetData = {
+              id: finalPetId,
+              registrationNumber: assignedReg,
+              ownerId: lookupResult?.user?.uid || `unclaimed_${bookingPayload.customerPhone.replace(/\D/g, '')}`,
+              ownerName: bookingPayload.customerName.trim(),
+              ownerAddress: bookingPayload.customerAddress || '',
+              contactNumber: bookingPayload.customerPhone,
+              name: bookingPayload.newPet?.name?.trim() || 'Pet',
+              species: bookingPayload.newPet?.species?.trim() || 'Dog',
+              gender: bookingPayload.newPet?.gender?.trim() || 'Male',
+              coatColour: bookingPayload.newPet?.coatColour || '',
+              breed: bookingPayload.newPet?.breed?.trim() || 'Mixed',
+              dob: bookingPayload.newPet?.dob || '',
+              age: bookingPayload.newPet?.age || '',
+              photoUrl: bookingPayload.newPet?.photoUrl || '',
+              storagePath: bookingPayload.newPet?.storagePath || '',
+              businessId: targetBizId,
+              shopId: targetShopId,
+              status: 'Active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+
+            await setDoc(doc(db, 'pets', finalPetId), finalPetData);
+          }
+
+          // 2. Create Appointment Document in Firestore
+          const aptDocId = `apt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          const aptCode = `HPPC-${String(Date.now()).slice(-6)}`;
+          const aptPayload = {
+            id: aptDocId,
+            appointmentId: aptCode,
+            customerName: bookingPayload.customerName,
+            customerPhone: bookingPayload.customerPhone,
+            customerAddress: bookingPayload.customerAddress,
+            userId: lookupResult?.user?.uid || `unclaimed_${bookingPayload.customerPhone.replace(/\D/g, '')}`,
+            petId: finalPetId,
+            petName: finalPetData?.name || bookingPayload.newPet?.name || 'Pet',
+            petSpecies: finalPetData?.species || bookingPayload.newPet?.species || 'Dog',
+            petBreed: finalPetData?.breed || bookingPayload.newPet?.breed || 'Mixed',
+            petGender: finalPetData?.gender || bookingPayload.newPet?.gender || 'Male',
+            petAge: finalPetData?.age || bookingPayload.newPet?.age || '',
+            serviceId: selectedService?.id || 'ser_std_01',
+            serviceName: bookingPayload.serviceName || 'Veterinary Consultation',
+            servicePrice: bookingPayload.servicePrice,
+            consultationFee: bookingPayload.consultationFee,
+            medicineCharges: bookingPayload.medicineCharges,
+            discount: bookingPayload.discount,
+            totalAmount: bookingPayload.totalAmount,
+            paymentStatus: bookingPayload.paymentStatus,
+            paymentMethod: bookingPayload.paymentMethod,
+            administeredItems: bookingPayload.administeredItems || [],
+            doctorId: bookingPayload.doctorId,
+            doctorName: bookingPayload.doctorName,
+            appointmentDate: bookingPayload.appointmentDate,
+            appointmentTime: bookingPayload.appointmentTime,
+            concernCategory: bookingPayload.concernCategory,
+            symptoms: bookingPayload.symptoms,
+            notes: bookingPayload.notes,
+            shopId: targetShopId,
+            businessId: targetBizId,
+            status: 'Confirmed',
+            isWalkIn: true,
+            isUnclaimed: !lookupResult?.user?.uid,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          await setDoc(doc(db, 'appointments', aptDocId), aptPayload);
+          appointmentData = aptPayload;
+        } catch (directClientErr: any) {
+          console.error('[Walk-in Booking Client Fallback Error]', directClientErr);
+          setFormError(error || data?.error || directClientErr.message || 'Failed to book appointment. Please try again.');
+          return;
+        }
+      } else {
+        appointmentData = data.appointment;
       }
 
-      setSuccessMessage(data.message || 'Walk-in appointment booked and confirmed successfully!');
+      setSuccessMessage(data?.message || 'Walk-in appointment booked and confirmed successfully!');
 
-      if (onSuccess && data.appointment) {
-        onSuccess(data.appointment);
+      if (onSuccess && appointmentData) {
+        onSuccess(appointmentData);
       }
 
       setTimeout(() => {

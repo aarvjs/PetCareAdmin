@@ -39,6 +39,24 @@ interface PrescriptionDetails {
   prescribedItems?: Array<{ name?: string; dosage?: string; instructions?: string }>;
   advice?: string;
   nextVisitDate?: string;
+  consultationFee?: number;
+  medicinesFee?: number;
+  packageFee?: number;
+  discount?: number;
+  totalAmount?: number;
+  purchasedPackage?: {
+    packageName?: string;
+    vaccineName?: string;
+    totalDoses?: number;
+    pricePerDose?: number;
+    packagePrice?: number;
+    amountPaid?: number;
+    outstandingAmount?: number;
+    paymentStatus?: string;
+    administeredDoses?: number;
+    remainingDoses?: number;
+    nextScheduledDoseDate?: string;
+  } | null;
   clinicAddress?: string;
   emergencyContacts?: string;
   clinicTimings?: string;
@@ -131,6 +149,7 @@ export default function AppointmentPrescriptionPrintPage() {
     administeredItems = [],
     prescribedItems = [],
     advice = 'Blood Profile: Basic + BP + RBS',
+    purchasedPackage = null,
     clinicAddress = '620/112, W Block, Keshav Nagar (Near Shri Guest House), Kanpur, Uttar Pradesh – 208014',
     emergencyContacts = '7568308808, 9460674066',
     clinicTimings = '10:30AM to 01:00PM, 05:00PM to 09:00PM',
@@ -335,13 +354,57 @@ export default function AppointmentPrescriptionPrintPage() {
               )}
 
               {administeredItems.length === 0 && prescribedItems.length === 0 && (
-                <div className="space-y-1.5 text-xs sm:text-sm font-sans">
-                  <p className="font-semibold text-slate-900">Inj. Oframax 225 mg IM</p>
-                  <p className="font-semibold text-slate-900">Inj. Lytadine 0.7 ml IM</p>
-                  <p className="font-semibold text-slate-900">Inj. Krontic - 4 0.4 ml IM</p>
+                <div className="text-xs sm:text-sm font-sans text-slate-500 italic py-2">
+                  No medications or injections recorded for this visit.
                 </div>
               )}
             </div>
+
+            {/* Vaccine Package Purchase & Schedule Receipt (Feature 2E) */}
+            {purchasedPackage && (
+              <div className="my-2 p-2 bg-slate-50 border border-slate-300 rounded text-[10px] sm:text-[11px] font-sans">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-1 mb-1 font-bold text-slate-900">
+                  <span>Vaccine Package: {purchasedPackage.packageName || purchasedPackage.vaccineName}</span>
+                  <span className="uppercase text-[9px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
+                    Payment: {purchasedPackage.paymentStatus || 'Paid'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-slate-700 text-[10px]">
+                  <div>
+                    <span>Total Package Doses: </span>
+                    <strong>{purchasedPackage.totalDoses} Doses</strong>
+                    <span> (@ ₹{purchasedPackage.pricePerDose}/dose)</span>
+                  </div>
+                  <div className="text-right">
+                    <span>Total Package Price: </span>
+                    <strong className="text-slate-900">₹{(purchasedPackage.packagePrice || 0).toFixed(2)}</strong>
+                  </div>
+                  <div>
+                    <span>Amount Paid: </span>
+                    <strong className="text-emerald-700">₹{(purchasedPackage.amountPaid || 0).toFixed(2)}</strong>
+                    {(purchasedPackage.outstandingAmount || 0) > 0 && (
+                      <span className="text-red-600"> (Bal: ₹{(purchasedPackage.outstandingAmount || 0).toFixed(2)})</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <span>Dose Administered Today: </span>
+                    <strong>Dose 1 (Completed)</strong>
+                  </div>
+                  <div>
+                    <span>Doses Remaining: </span>
+                    <strong className="text-purple-700">{purchasedPackage.remainingDoses} doses</strong>
+                  </div>
+                  <div className="text-right">
+                    <span>Next Scheduled Dose: </span>
+                    <strong>
+                      {purchasedPackage.nextScheduledDoseDate
+                        ? new Date(purchasedPackage.nextScheduledDoseDate).toLocaleDateString('en-GB')
+                        : 'Scheduled'}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Advice Section */}
             <div className="pt-6 font-serif">

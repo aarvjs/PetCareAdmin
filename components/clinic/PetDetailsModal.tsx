@@ -25,6 +25,7 @@ import { collection, onSnapshot, query, where, doc, updateDoc } from 'firebase/f
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/lib/authContext';
 import { safeFetchJson } from '@/lib/safeFetch';
+import { PetPurchasedPackage } from '@/lib/vaccineSchedule';
 import { RecordTreatmentModal } from './RecordTreatmentModal';
 
 export interface PetDetailsModalPet {
@@ -99,10 +100,12 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
   isDoctor = false,
 }) => {
   const { profile, business, user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'treatments' | 'notes'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'treatments' | 'packages' | 'notes'>('profile');
   const [treatments, setTreatments] = useState<PetTreatmentRecord[]>([]);
+  const [petPackages, setPetPackages] = useState<PetPurchasedPackage[]>([]);
   const [isLoadingTreatments, setIsLoadingTreatments] = useState(false);
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
+  const [isAdministeringDose, setIsAdministeringDose] = useState(false);
 
   // Medical Notes Editing (for Doctors)
   const [isEditingNotes, setIsEditingNotes] = useState(false);
@@ -143,9 +146,19 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
       setIsLoadingTreatments(false);
     };
 
-    loadTreatments();
+    const loadPackages = async () => {
+      try {
+        const { ok, data } = await safeFetchJson<any>(`/api/clinic/pets/${pet.id}/vaccine-packages`);
+        if (ok && data?.success && Array.isArray(data.packages)) {
+          setPetPackages(data.packages);
+        }
+      } catch (_) {}
+    };
 
-    // Listen to the pet document directly (which stores the treatments array in real time)
+    loadTreatments();
+    loadPackages();
+
+    // Listen to the pet document directly (which stores treatments and vaccinePackages)
     const petDocRef = doc(db, 'pets', pet.id);
     const unsubscribe = onSnapshot(
       petDocRef,
@@ -156,6 +169,9 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
             const list = [...petData.treatments];
             list.sort((a: any, b: any) => new Date(b.administeredAt || 0).getTime() - new Date(a.administeredAt || 0).getTime());
             setTreatments(list);
+          }
+          if (Array.isArray(petData.vaccinePackages)) {
+            setPetPackages(petData.vaccinePackages);
           }
         }
         setIsLoadingTreatments(false);
@@ -198,6 +214,46 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
       return { label: `Booster Due: ${nextDueDate}`, color: 'bg-[#F1EEFF] text-[#7567E8] border-[#7567E8]/30' };
     }
     return { label: `Booster Was Due: ${nextDueDate}`, color: 'bg-amber-50 text-amber-800 border-amber-200' };
+  };
+
+  // Administer next pending package dose
+  const handleAdministerPackageDose = async (pkg: PetPurchasedPackage) => {
+    if (pkg.remainingDoses <= 0) {
+      alert('All doses under this package have already been administered.');
+      return;
+    }
+    const nextPendingDose = pkg.doses.find((d) => d.status === 'pending');
+    const doseLabel = nextPendingDose ? nextPendingDose.doseNumber : `Dose ${(pkg.administeredDoses || 0) + 1}`;
+    if (!window.confirm(`Administer ${doseLabel} of ${pkg.packageName} today? Fee is ₹0 as it is covered under this prepaid package.`)) {
+      return;
+    }
+
+    setIsAdministeringDose(true);
+    try {
+      const idToken = user ? await user.getIdToken() : '';
+      const { data, error } = await safeFetchJson<any>(`/api/clinic/pets/${pet.id}/vaccine-packages/${pkg.id}/administer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          doseIndex: nextPendingDose ? nextPendingDose.doseIndex : (pkg.administeredDoses || 0) + 1,
+          doctorName: profile?.fullName || 'Attending Doctor',
+          notes: 'Administered under active prepaid package',
+        }),
+      });
+
+      if (error || !data?.success) {
+        alert(error || data?.error || 'Failed to record package dose.');
+      } else {
+        alert(`${doseLabel} successfully recorded and scheduled!`);
+      }
+    } catch (e: any) {
+      alert(`Error administering dose: ${e.message}`);
+    } finally {
+      setIsAdministeringDose(false);
+    }
   };
 
   return (
@@ -281,6 +337,18 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
             >
               <Syringe className="w-3.5 h-3.5" />
               Vaccination & Treatment History ({treatments.length})
+            </button>
+
+            <button
+              onClick={() => setActiveTab('packages')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                activeTab === 'packages'
+                  ? 'bg-[#7567E8] text-white shadow-2xs'
+                  : 'bg-[#F8FAFC] text-[#737780] hover:text-[#25242A]'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Vaccine Packages ({petPackages.length})
             </button>
 
             <button
@@ -600,6 +668,140 @@ export const PetDetailsModal: React.FC<PetDetailsModalProps> = ({
                 <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-700 text-xs font-semibold flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Clinical examination notes updated successfully!</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: VACCINE PACKAGES & DOSE TRACKING */}
+          {activeTab === 'packages' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-extrabold text-[#737780] uppercase tracking-wider">
+                  Purchased Multi-Dose Vaccine Packages
+                </h4>
+              </div>
+
+              {petPackages.length === 0 ? (
+                <div className="p-8 text-center bg-[#F8FAFC] border border-[#E8ECF0] rounded-2xl space-y-2">
+                  <Syringe className="w-8 h-8 text-[#7567E8] mx-auto opacity-60" />
+                  <p className="font-bold text-xs text-[#25242A]">No Vaccine Packages Active</p>
+                  <p className="text-[11px] text-[#737780] max-w-xs mx-auto">
+                    This pet does not have an active prepaid vaccine package. You can assign packages during walk-in or treatment recording.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {petPackages.map((pkg) => {
+                    const pct = Math.round(((pkg.administeredDoses || 0) / (pkg.totalDoses || 1)) * 100);
+                    const nextPending = pkg.doses?.find((d) => d.status === 'pending');
+
+                    return (
+                      <div key={pkg.id} className="p-4 bg-white border border-[#E8ECF0] rounded-2xl space-y-3 shadow-xs">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h5 className="font-extrabold text-sm text-[#25242A]">{pkg.packageName}</h5>
+                            <p className="text-xs text-[#7567E8] font-bold mt-0.5">{pkg.vaccineName}</p>
+                          </div>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                              pkg.remainingDoses === 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-purple-100 text-purple-800'
+                            }`}
+                          >
+                            {pkg.remainingDoses === 0 ? 'Series Completed' : `${pkg.remainingDoses} doses left`}
+                          </span>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div>
+                          <div className="flex justify-between text-[11px] font-bold text-[#737780] mb-1">
+                            <span>
+                              {pkg.administeredDoses} of {pkg.totalDoses} Doses Completed
+                            </span>
+                            <span>{pct}%</span>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                            <div className="bg-[#7567E8] h-full rounded-full transition-all" style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+
+                        {/* Financial Snapshot */}
+                        <div className="grid grid-cols-3 gap-2 p-2.5 bg-[#F8FAFC] rounded-xl text-center text-xs">
+                          <div>
+                            <span className="text-[10px] text-[#737780] block">Package Price</span>
+                            <strong className="text-slate-900 font-bold">₹{pkg.packagePrice.toFixed(2)}</strong>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-[#737780] block">Amount Paid</span>
+                            <strong className="text-emerald-700 font-bold">₹{(pkg.amountPaid || 0).toFixed(2)}</strong>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-[#737780] block">Balance</span>
+                            <strong className="text-slate-700 font-bold">₹{(pkg.outstandingAmount || 0).toFixed(2)}</strong>
+                          </div>
+                        </div>
+
+                        {/* Doses Timeline */}
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[10px] font-extrabold text-[#737780] uppercase block">Dose History & Schedule</span>
+                          <div className="divide-y divide-slate-100">
+                            {Array.isArray(pkg.doses) &&
+                              pkg.doses.map((dose) => (
+                                <div key={dose.doseIndex} className="py-1.5 flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                                        dose.status === 'administered'
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : 'bg-slate-100 text-slate-500'
+                                      }`}
+                                    >
+                                      {dose.doseIndex}
+                                    </span>
+                                    <span className="font-bold text-slate-800">{dose.doseNumber}</span>
+                                    {dose.administeredAt && (
+                                      <span className="text-[10px] text-slate-500">
+                                        (Administered {dose.administeredAt.split('T')[0]})
+                                      </span>
+                                    )}
+                                    {dose.status === 'pending' && dose.scheduledDate && (
+                                      <span className="text-[10px] text-purple-700 font-semibold">
+                                        (Scheduled: {dose.scheduledDate})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                      dose.status === 'administered'
+                                        ? 'bg-emerald-50 text-emerald-700'
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}
+                                  >
+                                    {dose.status === 'administered' ? 'Administered' : 'Pending'}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+
+                        {/* Administer Action */}
+                        {pkg.remainingDoses > 0 && nextPending && (
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
+                            <Button
+                              size="sm"
+                              onClick={() => handleAdministerPackageDose(pkg)}
+                              disabled={isAdministeringDose}
+                              icon={<Syringe className="w-3.5 h-3.5" />}
+                            >
+                              {isAdministeringDose ? 'Recording...' : `Administer ${nextPending.doseNumber} (₹0 fee)`}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -27,6 +27,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { safeFetchJson } from '@/lib/safeFetch';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import { ClinicMedicineItem } from './ClinicInventoryManager';
 import {
   calculateVaccineDoseSchedule,
@@ -113,6 +115,16 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
   const [successMessage, setSuccessMessage] = useState('');
   const [savedTreatment, setSavedTreatment] = useState<any>(null);
 
+  // Quick Add Medicine State
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [quickMedName, setQuickMedName] = useState('');
+  const [quickMedCategory, setQuickMedCategory] = useState('Injection');
+  const [quickMedStock, setQuickMedStock] = useState('10');
+  const [quickMedUnit, setQuickMedUnit] = useState('ampoule');
+  const [quickMedPrice, setQuickMedPrice] = useState('150');
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+  const [quickAddError, setQuickAddError] = useState('');
+
   // Load Inventory & existing treatment data on open
   useEffect(() => {
     if (!isOpen || !appointment) return;
@@ -120,37 +132,19 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
     setErrorMessage('');
     setSuccessMessage('');
 
-    // Pre-fill from appointment
+    // Pre-fill from appointment or clean defaults
     setHistory(appointment.symptoms || appointment.notes || '');
-    setTemperature(appointment.temperature || '101.2');
-    setWeight(appointment.weight || '09.100');
-    setClinicalSigns(appointment.clinicalSigns || (appointment.symptoms ? 'Emesis' : ''));
-    setPrognosis(appointment.prognosis || 'Guarded');
+    setTemperature(appointment.temperature || '');
+    setWeight(appointment.weight || '');
+    setClinicalSigns(appointment.clinicalSigns || '');
+    setPrognosis(appointment.prognosis || 'Normal');
     setDiagnosis(appointment.diagnosis || '');
-    setAdvice(appointment.advice || 'Blood Profile: Basic + BP + RBS. Keep warm, bland soft diet.');
+    setAdvice(appointment.advice || '');
     setNextVisitDate(appointment.nextVisitDate || '');
 
-    // Defaults for medicines if empty
-    setAdministeredItems([
-      {
-        medicineId: '',
-        name: 'Inj. Oframax',
-        dosage: '225 mg',
-        route: 'IM',
-        quantity: '1',
-        unit: 'vial',
-        charge: '150',
-      },
-    ]);
-
-    setPrescribedItems([
-      {
-        name: 'Tab. Safeheart 5mg',
-        dosage: '1 tab',
-        instructions: 'Once daily after meals for 7 days',
-        quantity: '7 tabs',
-      },
-    ]);
+    // Clean initial state for medications
+    setAdministeredItems([]);
+    setPrescribedItems([]);
 
     // If already has treatment, load existing
     if (appointment.treatmentId) {
@@ -287,6 +281,83 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
     setPrescribedItems(updated);
   };
 
+  const handleQuickAddMedicine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickMedName.trim()) {
+      setQuickAddError('Medicine or vaccine name is required.');
+      return;
+    }
+    setIsQuickSaving(true);
+    setQuickAddError('');
+
+    const targetBiz = appointment.businessId || profile?.businessId || '';
+    const targetShop = appointment.shopId || profile?.shopId || '';
+    const newMedId = `med_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const parsedStock = parseInt(quickMedStock, 10) || 10;
+    const parsedPrice = parseFloat(quickMedPrice) || 0;
+
+    const payload = {
+      name: quickMedName.trim(),
+      category: quickMedCategory,
+      stockQuantity: parsedStock,
+      unit: quickMedUnit.trim().toLowerCase(),
+      price: parsedPrice,
+      lowStockThreshold: 5,
+      status: 'active' as const,
+      businessId: targetBiz,
+      shopId: targetShop,
+    };
+
+    try {
+      const idToken = user ? await user.getIdToken() : '';
+      const { data, error } = await safeFetchJson<any>('/api/clinic/inventory', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const savedItem: ClinicMedicineItem = {
+        id: (data as any)?.item?.id || newMedId,
+        ...payload,
+      };
+
+      if (error || !data?.success) {
+        await setDoc(doc(db, 'inventory', newMedId), {
+          id: newMedId,
+          ...payload,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      setInventoryList((prev) => [...prev, savedItem]);
+      const isVac = isVaccineItem(savedItem.category, savedItem.name);
+      setAdministeredItems((prev) => [
+        ...prev,
+        {
+          medicineId: savedItem.id,
+          name: savedItem.name,
+          category: savedItem.category,
+          unit: savedItem.unit || 'unit',
+          dosage: `1 ${savedItem.unit || 'unit'}`,
+          route: isVac ? 'SC' : 'IM',
+          quantity: '1',
+          charge: String(savedItem.price || 0),
+          doseNumber: isVac ? 'Dose 1' : undefined,
+        },
+      ]);
+      setIsQuickAddOpen(false);
+      setQuickMedName('');
+    } catch (err: any) {
+      setQuickAddError(err.message || 'Failed to quickly add medicine.');
+    } finally {
+      setIsQuickSaving(false);
+    }
+  };
+
   // Submit Treatment Form
   const handleSubmitTreatment = async (isDraft = false) => {
     if (!diagnosis.trim() && !isDraft) {
@@ -391,10 +462,11 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
   };
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={`Clinical Consultation - ${appointment?.petName || 'Patient'}`}
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={`Clinical Consultation - ${appointment?.petName || 'Patient'}`}
       subtitle={`Booking Ref: ${appointment?.appointmentId || appointment?.id} • Registration: ${
         appointment?.petRegistrationNumber || 'HPPC/P/01'
       }`}
@@ -562,9 +634,24 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
                   <Syringe className="w-4 h-4" />
                   <span>2. Administered Injections & Treatments (Atomically Deducts Stock)</span>
                 </div>
-                <Button size="sm" variant="secondary" onClick={addAdministeredRow} icon={<Plus className="w-3.5 h-3.5" />}>
-                  Add Injection
-                </Button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickMedCategory('Injection');
+                      setQuickMedUnit('ampoule');
+                      setQuickMedStock('10');
+                      setQuickMedPrice('150');
+                      setIsQuickAddOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-[#0284C7] hover:underline flex items-center gap-0.5"
+                  >
+                    <Plus className="w-3 h-3" /> Quick Add Medicine
+                  </button>
+                  <Button size="sm" variant="secondary" onClick={addAdministeredRow} icon={<Plus className="w-3.5 h-3.5" />}>
+                    Add Injection
+                  </Button>
+                </div>
               </div>
 
               {administeredItems.length === 0 ? (
@@ -1065,11 +1152,7 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
                     )}
 
                     {administeredItems.length === 0 && prescribedItems.length === 0 && (
-                      <div className="space-y-1 text-xs font-sans">
-                        <p className="font-semibold text-slate-900">Inj. Oframax 225 mg IM</p>
-                        <p className="font-semibold text-slate-900">Inj. Lytadine 0.7 ml IM</p>
-                        <p className="font-semibold text-slate-900">Inj. Krontic - 4 0.4 ml IM</p>
-                      </div>
+                      <p className="text-slate-500 italic text-xs py-1">No medications or injections recorded for this visit.</p>
                     )}
                   </div>
 
@@ -1134,5 +1217,122 @@ export const AppointmentTreatmentModal: React.FC<AppointmentTreatmentModalProps>
         )}
       </div>
     </Modal>
+
+    {/* Quick Add Medicine Modal */}
+    <Modal
+      isOpen={isQuickAddOpen}
+      onClose={() => {
+        setIsQuickAddOpen(false);
+        setQuickAddError('');
+      }}
+      title={`Quick Add ${quickMedCategory === 'Vaccine' ? 'Vaccine' : 'Medicine'} to Inventory`}
+      subtitle="Adds to clinic inventory and selects it immediately for this appointment"
+      maxWidth="md"
+    >
+      <form onSubmit={handleQuickAddMedicine} className="space-y-4 pt-2">
+        {quickAddError && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-600 font-semibold text-xs">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{quickAddError}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="text-xs font-bold text-[#25242A] block mb-1">
+            {quickMedCategory === 'Vaccine' ? 'Vaccine Name' : 'Medicine / Injection Name'} *
+          </label>
+          <input
+            type="text"
+            required
+            placeholder={
+              quickMedCategory === 'Vaccine'
+                ? 'e.g. Nobivac DHPPi'
+                : 'e.g. Inj. Oframax, Inj. Melonex, Tab. Safeheart'
+            }
+            value={quickMedName}
+            onChange={(e) => setQuickMedName(e.target.value)}
+            className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-medium text-[#25242A] focus:outline-none"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-bold text-[#25242A] block mb-1">Category *</label>
+            <select
+              value={quickMedCategory}
+              onChange={(e) => setQuickMedCategory(e.target.value)}
+              className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-medium text-[#25242A] focus:outline-none"
+            >
+              <option value="Injection">Injection</option>
+              <option value="Vaccine">Vaccine</option>
+              <option value="Tablet">Tablet</option>
+              <option value="Syrup">Syrup</option>
+              <option value="Drops">Drops</option>
+              <option value="Saline">Saline / IV Fluid</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-[#25242A] block mb-1">Unit of Measure *</label>
+            <input
+              type="text"
+              required
+              placeholder="e.g. ampoule, vial, tab"
+              value={quickMedUnit}
+              onChange={(e) => setQuickMedUnit(e.target.value)}
+              className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-medium text-[#25242A] focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-bold text-[#25242A] block mb-1">Initial Stock</label>
+            <input
+              type="number"
+              min="0"
+              value={quickMedStock}
+              onChange={(e) => setQuickMedStock(e.target.value)}
+              className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-medium text-[#25242A] focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-[#25242A] block mb-1">Fee / Selling Price (₹)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={quickMedPrice}
+              onChange={(e) => setQuickMedPrice(e.target.value)}
+              className="w-full bg-[#F8FAFC] border border-[#E8ECF0] focus:border-[#7567E8] rounded-xl px-3 py-2 text-xs font-medium text-[#25242A] focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#E8ECF0]">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsQuickAddOpen(false)}
+            disabled={isQuickSaving}
+          >
+            Cancel
+          </Button>
+
+          <Button
+            type="submit"
+            size="sm"
+            disabled={isQuickSaving || !quickMedName.trim()}
+            icon={isQuickSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+          >
+            {isQuickSaving ? 'Saving...' : 'Add & Administer'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+    </>
   );
 };

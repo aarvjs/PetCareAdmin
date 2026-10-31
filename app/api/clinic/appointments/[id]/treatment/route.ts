@@ -74,6 +74,7 @@ export async function POST(
       nextVisitDate,
       idempotencyKey,
       isDraft = false,
+      purchasedPackage, // { packageId, packageName, vaccineName, totalDoses, pricePerDose, packagePrice, amountPaid, paymentStatus, intervalDays, scheduledDates }
     } = body;
 
     // 2. Fetch existing appointment
@@ -338,6 +339,7 @@ export async function POST(
       prescribedItems: (prescribedItems && prescribedItems.length > 0) ? prescribedItems : (body.prescriptions || []),
       consultationFee: parseFloat(consultationFee) || 0,
       medicinesFee: parseFloat(medicinesFee) || 0,
+      packageFee: purchasedPackage ? (parseFloat(purchasedPackage.packagePrice) || 0) : 0,
       discount: parseFloat(discount) || 0,
       totalAmount: parseFloat(totalAmount) || parseFloat(body.totalCharge) || 0,
       advice: advice || body.advice || '',
@@ -347,6 +349,21 @@ export async function POST(
       status: isDraft ? 'draft' : 'finalized',
       sharedWithCustomer: true,
       consultationDate: appointmentDoc.appointmentDate || nowIso.split('T')[0],
+      purchasedPackage: purchasedPackage ? {
+        packageId: purchasedPackage.packageId,
+        packageName: purchasedPackage.packageName || purchasedPackage.name,
+        vaccineName: purchasedPackage.vaccineName || purchasedPackage.packageName,
+        totalDoses: parseInt(purchasedPackage.totalDoses, 10),
+        pricePerDose: parseFloat(purchasedPackage.pricePerDose),
+        packagePrice: parseFloat(purchasedPackage.packagePrice),
+        amountPaid: parseFloat(purchasedPackage.amountPaid ?? purchasedPackage.packagePrice),
+        outstandingAmount: Math.max(0, parseFloat(purchasedPackage.packagePrice) - parseFloat(purchasedPackage.amountPaid ?? purchasedPackage.packagePrice)),
+        paymentStatus: purchasedPackage.paymentStatus || 'Paid',
+        paymentMethod: purchasedPackage.paymentMethod || 'Cash',
+        administeredDoses: purchasedPackage.administeredDoses || 1,
+        remainingDoses: Math.max(0, parseInt(purchasedPackage.totalDoses, 10) - (purchasedPackage.administeredDoses || 1)),
+        nextScheduledDoseDate: purchasedPackage.nextScheduledDoseDate || null,
+      } : null,
       pdfUrl: `/api/clinic/appointments/${targetAptDocId}/prescription?format=pdf`,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -411,9 +428,78 @@ export async function POST(
           treatment: treatmentRecord,
         });
 
+        const vaccineScheduleMap: Record<string, any> = petDoc.vaccineScheduleMap ? { ...petDoc.vaccineScheduleMap } : {};
+        for (const vac of administeredVaccines) {
+          if (vac.name) {
+            vaccineScheduleMap[vac.name] = {
+              vaccineName: vac.name,
+              vaccineBrand: vac.vaccineBrand || '',
+              doseNumber: vac.doseNumber || 'Administered',
+              lastAdministered: nowIso,
+              nextDueDate: vac.nextDueDate || nextVisitDate,
+              dosesRemaining: vac.dosesRemaining,
+              updatedAt: nowIso,
+            };
+          }
+        }
+
+        // Handle Package Purchase during this appointment
+        let petPackages: any[] = Array.isArray(petDoc.vaccinePackages) ? [...petDoc.vaccinePackages] : [];
+        if (treatmentRecord.purchasedPackage) {
+          const pkgData = treatmentRecord.purchasedPackage;
+          const pkgId = `pkg_purchased_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const totalD = pkgData.totalDoses || 1;
+          const dosesList = [];
+          for (let di = 1; di <= totalD; di++) {
+            const isFirstD = di === 1;
+            const scheduled = new Date(nowIso);
+            scheduled.setDate(scheduled.getDate() + (di - 1) * 21);
+            dosesList.push({
+              doseIndex: di,
+              doseNumber: di === totalD && totalD > 1 ? (totalD > 3 ? 'Annual Booster' : 'Booster') : `Dose ${di}`,
+              status: isFirstD ? 'administered' : 'pending',
+              scheduledDate: scheduled.toISOString().split('T')[0],
+              administeredAt: isFirstD ? nowIso : null,
+              administeredByDoctor: treatmentRecord.doctorName,
+              appointmentId: targetAptDocId,
+            });
+          }
+          const purchasedPkgObj = {
+            id: pkgId,
+            packageId: pkgData.packageId || pkgId,
+            packageName: pkgData.packageName,
+            vaccineName: pkgData.vaccineName,
+            petId: effectivePetId,
+            petName: treatmentRecord.petName,
+            totalDoses: totalD,
+            pricePerDose: pkgData.pricePerDose,
+            packagePrice: pkgData.packagePrice,
+            amountPaid: pkgData.amountPaid,
+            outstandingAmount: pkgData.outstandingAmount,
+            paymentStatus: pkgData.paymentStatus,
+            paymentMethod: pkgData.paymentMethod || 'Cash',
+            administeredDoses: 1,
+            remainingDoses: Math.max(0, totalD - 1),
+            purchasedAt: nowIso,
+            purchasedAppointmentId: targetAptDocId,
+            businessId: treatmentRecord.businessId,
+            shopId: treatmentRecord.shopId,
+            status: totalD > 1 ? 'active' : 'completed',
+            doses: dosesList,
+            nextScheduledDoseDate: dosesList[1]?.scheduledDate || null,
+            updatedAt: nowIso,
+          };
+          petPackages.unshift(purchasedPkgObj);
+          try {
+            await setFirestoreDocRest('pet_vaccine_packages', pkgId, purchasedPkgObj, authCheck.token);
+          } catch (_) {}
+        }
+
         const updatedPet: Record<string, any> = {
           ...petDoc,
           treatments: filtered,
+          vaccineScheduleMap,
+          vaccinePackages: petPackages,
           lastVisitDate: treatmentRecord.consultationDate,
           nextDueDate: nextVisitDate || petDoc.nextDueDate,
           updatedAt: nowIso,

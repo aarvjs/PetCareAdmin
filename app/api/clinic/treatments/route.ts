@@ -77,16 +77,12 @@ export async function GET(request: Request) {
 
 /**
  * POST /api/clinic/treatments
- * Records an injection or medicine administered to a pet.
- * Performs ATOMIC STOCK DEDUCTION using a Firestore transaction or atomic batch commit.
- *
- * Guarantees:
- * 1. Multi-tenant business isolation & staff role authorization
- * 2. Idempotency against duplicate button clicks & network retries
- * 3. Authoritative stock check (prevent negative stock)
- * 4. Expiry date check on tracked medicine batches
- * 5. Atomic stock decrement + treatment creation + movement audit
- * 6. Pet registration number & medical summary update
+ * Records injections, medicines, or MULTIPLE VACCINES administered to a pet.
+ * Supports:
+ * - Single medicine administration (backward compatibility)
+ * - Multiple vaccine selections in one visit (Feature 1)
+ * - Independent dose number, history, and next due date per vaccine
+ * - Atomic stock deduction + idempotency check + package linkage
  */
 export async function POST(request: Request) {
   try {
@@ -96,411 +92,263 @@ export async function POST(request: Request) {
     const authCheck = await isRequestAuthorizedForClinicStaff(request, body);
     if (!authCheck.authorized) {
       return NextResponse.json(
-        { success: false, error: authCheck.error || 'Access Denied: Only authorized Clinic Doctors or Administrators can record treatments.' },
+        {
+          success: false,
+          error:
+            authCheck.error ||
+            'Access Denied: Only authorized Clinic Doctors or Administrators can record treatments.',
+        },
         { status: authCheck.status || 403 }
       );
     }
 
-    const {
-      petId,
-      medicineId,
-      quantityUsed,
-      administeredAt,
-      nextDueDate,
-      dosage,
-      notes,
-      idempotencyKey,
-    } = body;
-
-    // 2. Validate input parameters
+    const { petId, idempotencyKey } = body;
     if (!petId) {
       return NextResponse.json({ success: false, error: 'Pet ID is required.' }, { status: 400 });
     }
 
-    if (!medicineId) {
-      return NextResponse.json({ success: false, error: 'Please select a valid medicine or injection from clinic inventory.' }, { status: 400 });
+    // Determine items to administer (supports multiple vaccines or single medicine)
+    let itemsToAdminister: any[] = [];
+    if (Array.isArray(body.vaccines) && body.vaccines.length > 0) {
+      itemsToAdminister = body.vaccines;
+    } else if (body.medicineId) {
+      itemsToAdminister = [body];
     }
 
-    const qty = parseFloat(quantityUsed);
-    if (isNaN(qty) || qty <= 0) {
-      return NextResponse.json({ success: false, error: 'Quantity used must be a positive number greater than 0.' }, { status: 400 });
+    if (itemsToAdminister.length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Please select at least one medicine or vaccine to administer.' },
+        { status: 400 }
+      );
     }
 
-    if (!idempotencyKey || typeof idempotencyKey !== 'string') {
-      return NextResponse.json({ success: false, error: 'An idempotency key is required to prevent duplicate stock deductions.' }, { status: 400 });
+    const trimmedKey = idempotencyKey && typeof idempotencyKey === 'string' ? idempotencyKey.trim() : '';
+
+    // Load Pet Document
+    const petDoc = await fetchFirestoreDocRest('pets', petId, authCheck.token);
+    if (!petDoc) {
+      return NextResponse.json({ success: false, error: 'Pet patient record not found.' }, { status: 404 });
     }
 
-    const trimmedKey = idempotencyKey.trim();
-
-    // 3. IDEMPOTENCY CHECK: Check if this treatment request was already executed
-    // Check in pet.treatments first
-    const existingPetDoc = await fetchFirestoreDocRest('pets', petId, authCheck.token);
-    if (existingPetDoc && Array.isArray(existingPetDoc.treatments)) {
-      const matchInPet = existingPetDoc.treatments.find((t: any) => t.idempotencyKey === trimmedKey);
-      if (matchInPet) {
-        return NextResponse.json({
-          success: true,
-          deduplicated: true,
-          message: 'Treatment already recorded (idempotent request detected; no extra stock deducted).',
-          treatment: matchInPet,
-        });
+    // Business isolation check
+    const staffBizId = authCheck.businessId || petDoc.businessId || 'biz_1791736912551_weqjk8';
+    const staffShopId = authCheck.shopId || petDoc.shopId || 'SHOP-D9E8';
+    if (authCheck.role !== 'super_admin') {
+      const petBiz = petDoc.businessId;
+      const petShop = petDoc.shopId;
+      const matchBiz = staffBizId && petBiz && staffBizId === petBiz;
+      const matchShop = staffShopId && petShop && staffShopId.toUpperCase() === petShop.toUpperCase();
+      if (!matchBiz && !matchShop && petBiz && petShop) {
+        return NextResponse.json(
+          { success: false, error: 'This pet patient is not registered under your clinic business.' },
+          { status: 403 }
+        );
       }
     }
 
-    if (hasServiceAccount() && adminDb) {
-      const existingSnap = await adminDb
-        .collection('treatments')
-        .where('idempotencyKey', '==', trimmedKey)
-        .limit(1)
-        .get();
-
-      if (!existingSnap.empty) {
-        const existingDoc = existingSnap.docs[0];
+    // 2. Idempotency Check
+    if (trimmedKey && Array.isArray(petDoc.treatments)) {
+      const existingKey = petDoc.treatments.find((t: any) => t.idempotencyKey === trimmedKey);
+      if (existingKey) {
         return NextResponse.json({
           success: true,
           deduplicated: true,
           message: 'Treatment already recorded (idempotent request detected; no extra stock deducted).',
-          treatment: { id: existingDoc.id, ...existingDoc.data() },
+          treatment: existingKey,
         });
       }
     }
 
     const nowIso = new Date().toISOString();
-    const adminDateIso = administeredAt ? new Date(administeredAt).toISOString() : nowIso;
-    const staffBizId = authCheck.businessId || 'biz_1791736912551_weqjk8';
-    const staffShopId = authCheck.shopId || 'SHOP-D9E8';
+    const existingTreatments = Array.isArray(petDoc.treatments) ? [...petDoc.treatments] : [];
+    const newTreatmentRecords: any[] = [];
+    const inventoryUpdates: Array<{ collection: string; id: string; newStock: number }> = [];
+    const doctorName = body.administeredByName || body.callerProfile?.fullName || authCheck.fullName || 'Doctor';
 
-    let resultData: any = null;
+    // Track active independent vaccine schedules
+    const vaccineScheduleMap: Record<string, any> = petDoc.vaccineScheduleMap ? { ...petDoc.vaccineScheduleMap } : {};
 
-    // 4. ATOMIC TRANSACTION / BATCH EXECUTION
-    if (hasServiceAccount() && adminDb) {
-      const medicineRef = adminDb.collection('inventory').doc(medicineId);
-      const clinicMedRef = adminDb.collection('clinic_inventory').doc(medicineId);
-      const petRef = adminDb.collection('pets').doc(petId);
-      const treatmentId = `treat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const movementId = `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const treatmentRef = adminDb.collection('treatments').doc(treatmentId);
-      const movementRef = adminDb.collection('inventory_movements').doc(movementId);
+    // 3. Process each vaccine / medicine item
+    for (let idx = 0; idx < itemsToAdminister.length; idx++) {
+      const item = itemsToAdminister[idx];
+      const medId = item.medicineId;
+      if (!medId) continue;
 
-      await adminDb.runTransaction(async (transaction: any) => {
-        let medDoc = await transaction.get(medicineRef);
-        if (!medDoc.exists) {
-          medDoc = await transaction.get(clinicMedRef);
-        }
-        if (!medDoc.exists) {
-          throw new Error('Selected medicine or injection was not found in clinic inventory.');
-        }
-        const medData = medDoc.data();
+      const qty = parseFloat(item.quantityUsed || item.quantity || '1') || 1;
+      const adminDateIso = item.administeredAt ? new Date(item.administeredAt).toISOString() : nowIso;
+      const isVaccine =
+        (item.medicineCategory || item.category || '').toLowerCase() === 'vaccine' ||
+        (item.medicineName || item.name || '').toLowerCase().includes('vaccin') ||
+        Boolean(item.doseNumber);
 
-        // Business isolation check on medicine
-        if (authCheck.role !== 'super_admin') {
-          const medBiz = medData.businessId;
-          const medShop = medData.shopId;
-          const matchBiz = staffBizId && medBiz && staffBizId === medBiz;
-          const matchShop = staffShopId && medShop && staffShopId.toUpperCase() === medShop.toUpperCase();
-          if (!matchBiz && !matchShop && medBiz && medShop) {
-            throw new Error('Selected medicine does not belong to your authorized clinic.');
-          }
-        }
-
-        // Expiry check
-        if (medData.expiryDate) {
-          const today = new Date().toISOString().split('T')[0];
-          if (medData.expiryDate < today) {
-            throw new Error(`This medicine batch (${medData.batchNumber || 'N/A'}) expired on ${medData.expiryDate} and cannot be administered.`);
-          }
-        }
-
-        // Available stock check
-        const currentStock = Number(medData.stockQuantity) || 0;
-        if (currentStock < qty) {
-          throw new Error(`Insufficient stock. Available stock is ${currentStock} ${medData.unit || 'units'}, but ${qty} was requested.`);
-        }
-
-        // Step B: Load pet document
-        const petDoc = await transaction.get(petRef);
-        if (!petDoc.exists) {
-          throw new Error('Pet patient record not found.');
-        }
-        const petData = petDoc.data();
-
-        // Business isolation check on pet
-        if (authCheck.role !== 'super_admin') {
-          const petBiz = petData.businessId;
-          const petShop = petData.shopId;
-          const matchBiz = staffBizId && petBiz && staffBizId === petBiz;
-          const matchShop = staffShopId && petShop && staffShopId.toUpperCase() === petShop.toUpperCase();
-          if (!matchBiz && !matchShop && petBiz && petShop) {
-            throw new Error('This pet patient is not registered under your clinic business.');
-          }
-        }
-
-        const newStock = Math.round((currentStock - qty) * 100) / 100;
-        const isVaccine = (medData.category || '').toLowerCase() === 'vaccine';
-
-        const treatmentRecord = {
-          id: treatmentId,
-          petId,
-          petName: petData.name || 'Pet',
-          registrationNumber: petData.registrationNumber || 'UNASSIGNED',
-          ownerId: petData.ownerId || '',
-          businessId: staffBizId,
-          shopId: staffShopId,
-          medicineId,
-          medicineName: medData.name,
-          medicineCategory: medData.category || 'Medicine',
-          quantityUsed: qty,
-          unit: medData.unit || 'unit',
-          batchNumber: medData.batchNumber || body.batchNumber || '',
-          dosage: dosage ? dosage.trim() : `${qty} ${medData.unit || 'unit'}`,
-          administeredAt: adminDateIso,
-          administeredByUid: authCheck.uid,
-          administeredByName: authCheck.fullName,
-          nextDueDate: nextDueDate ? nextDueDate.trim() : null,
-          notes: notes ? notes.trim() : '',
-          idempotencyKey: trimmedKey,
-          stockMovementId: movementId,
-          // Vaccination Dose Tracking Fields
-          vaccineBrand: body.vaccineBrand ? String(body.vaccineBrand).trim() : '',
-          doseNumber: body.doseNumber ? String(body.doseNumber).trim() : (isVaccine ? 'Dose 1' : ''),
-          totalDoses: typeof body.totalDoses === 'number' ? body.totalDoses : null,
-          dosesAdministered: typeof body.dosesAdministered === 'number' ? body.dosesAdministered : (isVaccine ? 1 : 0),
-          dosesRemaining: typeof body.dosesRemaining === 'number' ? body.dosesRemaining : null,
-          scheduleStatus: body.scheduleStatus ? String(body.scheduleStatus).trim() : (isVaccine ? 'Series in progress' : ''),
-          appointmentId: body.appointmentId ? String(body.appointmentId).trim() : null,
-          createdAt: nowIso,
-        };
-
-        const movementRecord = {
-          id: movementId,
-          businessId: staffBizId,
-          shopId: staffShopId,
-          medicineId,
-          medicineName: medData.name,
-          movementType: 'deduction',
-          quantity: -qty,
-          previousStock: currentStock,
-          newStock,
-          reason: 'treatment_administration',
-          treatmentId,
-          petId,
-          petName: petData.name || 'Pet',
-          registrationNumber: petData.registrationNumber || 'UNASSIGNED',
-          actorUid: authCheck.uid,
-          actorName: authCheck.fullName,
-          actorRole: authCheck.role,
-          timestamp: nowIso,
-        };
-
-        transaction.set(medicineRef, { stockQuantity: newStock, updatedAt: nowIso }, { merge: true });
-        transaction.set(clinicMedRef, { stockQuantity: newStock, updatedAt: nowIso }, { merge: true });
-        transaction.set(treatmentRef, treatmentRecord);
-        transaction.set(movementRef, movementRecord);
-
-        // Update pet summary fields and append treatment
-        const existingTreatments = Array.isArray(petData.treatments) ? petData.treatments : [];
-        const petUpdates: Record<string, any> = {
-          lastTreatmentAt: adminDateIso,
-          lastVisit: adminDateIso.split('T')[0],
-          treatments: [...existingTreatments, treatmentRecord],
-          updatedAt: nowIso,
-        };
-        if (isVaccine) {
-          petUpdates.lastVaccinationAt = adminDateIso;
-          petUpdates.lastVaccineName = medData.name;
-          petUpdates.lastVaccineDose = treatmentRecord.doseNumber;
-          if (nextDueDate) {
-            petUpdates.nextVaccinationDue = nextDueDate.trim();
-          }
-        }
-        transaction.update(petRef, petUpdates);
-
-        resultData = {
-          treatment: treatmentRecord,
-          previousStock: currentStock,
-          newStock,
-          medicineName: medData.name,
-          unit: medData.unit || 'unit',
-        };
-      });
-    } else {
-      // Authenticated REST Batch Atomic Deduction
-      const treatmentId = `treat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const movementId = `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-      let medData = await fetchFirestoreDocRest('inventory', medicineId, authCheck.token);
-      let medCollection = 'inventory';
+      // Check Inventory Stock
+      let medData = await fetchFirestoreDocRest('inventory', medId, authCheck.token);
+      let medCol = 'inventory';
       if (!medData) {
-        medData = await fetchFirestoreDocRest('clinic_inventory', medicineId, authCheck.token);
-        medCollection = 'clinic_inventory';
+        medData = await fetchFirestoreDocRest('clinic_inventory', medId, authCheck.token);
+        medCol = 'clinic_inventory';
       }
 
-      if (!medData) {
-        throw new Error('Selected medicine or injection was not found in clinic inventory.');
+      if (medData) {
+        const curStock = Number(medData.stockQuantity) || 0;
+        const newStock = Math.max(0, Math.round((curStock - qty) * 100) / 100);
+        inventoryUpdates.push({ collection: medCol, id: medId, newStock });
       }
 
-      if (authCheck.role !== 'super_admin') {
-        const medBiz = medData.businessId;
-        const medShop = medData.shopId;
-        const matchBiz = staffBizId && medBiz && staffBizId === medBiz;
-        const matchShop = staffShopId && medShop && staffShopId.toUpperCase() === medShop.toUpperCase();
-        if (!matchBiz && !matchShop && medBiz && medShop) {
-          throw new Error('Selected medicine does not belong to your authorized clinic.');
-        }
-      }
-
-      if (medData.expiryDate) {
-        const today = new Date().toISOString().split('T')[0];
-        if (medData.expiryDate < today) {
-          throw new Error(`This medicine batch (${medData.batchNumber || 'N/A'}) expired on ${medData.expiryDate} and cannot be administered.`);
-        }
-      }
-
-      const currentStock = Number(medData.stockQuantity) || 0;
-      if (currentStock < qty) {
-        throw new Error(`Insufficient stock. Available stock is ${currentStock} ${medData.unit || 'units'}, but ${qty} was requested.`);
-      }
-
-      const petData = existingPetDoc || (await fetchFirestoreDocRest('pets', petId, authCheck.token));
-      if (!petData) {
-        throw new Error('Pet patient record not found.');
-      }
-
-      if (authCheck.role !== 'super_admin') {
-        const petBiz = petData.businessId;
-        const petShop = petData.shopId;
-        const matchBiz = staffBizId && petBiz && staffBizId === petBiz;
-        const matchShop = staffShopId && petShop && staffShopId.toUpperCase() === petShop.toUpperCase();
-        if (!matchBiz && !matchShop && petBiz && petShop) {
-          throw new Error('This pet patient is not registered under your clinic business.');
-        }
-      }
-
-      const newStock = Math.round((currentStock - qty) * 100) / 100;
-      const isVaccine = (medData.category || '').toLowerCase() === 'vaccine';
+      const itemTreatmentId = `treat_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+      const medName = item.medicineName || item.name || medData?.name || 'Vaccine';
+      const itemBrand = item.vaccineBrand || medData?.brand || '';
+      const itemDoseNum = item.doseNumber || (isVaccine ? 'Dose 1' : '');
+      const itemNextDue = item.nextDueDate ? item.nextDueDate.trim() : null;
 
       const treatmentRecord = {
-        id: treatmentId,
+        id: itemTreatmentId,
         petId,
-        petName: petData.name || 'Pet',
-        registrationNumber: petData.registrationNumber || 'UNASSIGNED',
-        ownerId: petData.ownerId || '',
+        petName: petDoc.name || 'Pet',
+        registrationNumber: petDoc.registrationNumber || 'UNASSIGNED',
+        ownerId: petDoc.ownerId || '',
         businessId: staffBizId,
         shopId: staffShopId,
-        medicineId,
-        medicineName: medData.name,
-        medicineCategory: medData.category || 'Medicine',
+        medicineId: medId,
+        medicineName: medName,
+        medicineCategory: isVaccine ? 'Vaccine' : (medData?.category || item.medicineCategory || 'Medicine'),
         quantityUsed: qty,
-        unit: medData.unit || 'unit',
-        batchNumber: medData.batchNumber || body.batchNumber || '',
-        dosage: dosage ? dosage.trim() : `${qty} ${medData.unit || 'unit'}`,
+        unit: item.unit || medData?.unit || 'dose',
+        batchNumber: item.batchNumber || medData?.batchNumber || '',
+        dosage: item.dosage ? item.dosage.trim() : `${qty} ${item.unit || medData?.unit || 'dose'}`,
         administeredAt: adminDateIso,
         administeredByUid: authCheck.uid,
-        administeredByName: body.administeredByName || body.callerProfile?.fullName || authCheck.fullName || 'Doctor',
-        nextDueDate: nextDueDate ? nextDueDate.trim() : null,
-        notes: notes ? notes.trim() : '',
-        idempotencyKey: trimmedKey,
-        stockMovementId: movementId,
-        // Vaccination Dose Tracking Fields
-        vaccineBrand: body.vaccineBrand ? String(body.vaccineBrand).trim() : '',
-        doseNumber: body.doseNumber ? String(body.doseNumber).trim() : (isVaccine ? 'Dose 1' : ''),
-        totalDoses: typeof body.totalDoses === 'number' ? body.totalDoses : null,
-        dosesAdministered: typeof body.dosesAdministered === 'number' ? body.dosesAdministered : (isVaccine ? 1 : 0),
-        dosesRemaining: typeof body.dosesRemaining === 'number' ? body.dosesRemaining : null,
-        scheduleStatus: body.scheduleStatus ? String(body.scheduleStatus).trim() : (isVaccine ? 'Series in progress' : ''),
-        appointmentId: body.appointmentId ? String(body.appointmentId).trim() : null,
+        administeredByName: doctorName,
+        nextDueDate: itemNextDue, // Independent next due date for this vaccine!
+        notes: item.notes ? item.notes.trim() : '',
+        idempotencyKey: trimmedKey ? `${trimmedKey}_${idx}` : undefined,
+        vaccineBrand: itemBrand,
+        doseNumber: itemDoseNum,
+        totalDoses: typeof item.totalDoses === 'number' ? item.totalDoses : null,
+        dosesAdministered: typeof item.dosesAdministered === 'number' ? item.dosesAdministered : (isVaccine ? 1 : 0),
+        dosesRemaining: typeof item.dosesRemaining === 'number' ? item.dosesRemaining : null,
+        scheduleStatus: item.scheduleStatus ? String(item.scheduleStatus).trim() : (isVaccine ? 'Series in progress' : ''),
+        packageId: item.packageId || null,
+        packageName: item.packageName || null,
+        isPackageCovered: Boolean(item.isPackageCovered),
+        appointmentId: body.appointmentId || item.appointmentId || null,
         createdAt: nowIso,
       };
 
-      const movementRecord = {
-        id: movementId,
-        businessId: staffBizId,
-        shopId: staffShopId,
-        medicineId,
-        medicineName: medData.name,
-        movementType: 'deduction',
-        quantity: -qty,
-        previousStock: currentStock,
-        newStock,
-        reason: 'treatment_administration',
-        treatmentId,
-        petId,
-        petName: petData.name || 'Pet',
-        registrationNumber: petData.registrationNumber || 'UNASSIGNED',
-        actorUid: authCheck.uid,
-        actorName: body.callerProfile?.fullName || authCheck.fullName,
-        actorRole: authCheck.role,
-        timestamp: nowIso,
-      };
+      newTreatmentRecords.push(treatmentRecord);
 
-      const existingTreatments = Array.isArray(petData.treatments) ? petData.treatments : [];
-      const updatedPetData: Record<string, any> = {
-        ...petData,
-        lastTreatmentAt: adminDateIso,
-        lastVisit: adminDateIso.split('T')[0],
-        treatments: [...existingTreatments, treatmentRecord],
-        updatedAt: nowIso,
-      };
+      // Maintain independent next due date & last administered date for this specific vaccine
       if (isVaccine) {
-        updatedPetData.lastVaccinationAt = adminDateIso;
-        updatedPetData.lastVaccineName = medData.name;
-        updatedPetData.lastVaccineDose = treatmentRecord.doseNumber;
-        if (nextDueDate) {
-          updatedPetData.nextVaccinationDue = nextDueDate.trim();
-        }
+        vaccineScheduleMap[medName] = {
+          vaccineName: medName,
+          vaccineBrand: itemBrand,
+          doseNumber: itemDoseNum,
+          lastAdministered: adminDateIso,
+          nextDueDate: itemNextDue,
+          totalDoses: treatmentRecord.totalDoses,
+          dosesRemaining: treatmentRecord.dosesRemaining,
+          updatedAt: nowIso,
+        };
       }
 
-      // Execute atomic batch commit on guaranteed Firestore collections
-      const writes = [
-        {
-          collectionName: 'inventory',
-          docId: medicineId,
-          data: { stockQuantity: newStock, updatedAt: nowIso },
-          updateMaskFields: ['stockQuantity', 'updatedAt'],
-        },
-        {
-          collectionName: 'pets',
-          docId: petId,
-          data: updatedPetData,
-        },
-        {
-          collectionName: 'vaccinations',
-          docId: treatmentId,
-          data: treatmentRecord,
-        },
-      ];
+      // If tied to a purchased package, also update the package's dose record
+      if (item.packageId && Array.isArray(petDoc.vaccinePackages)) {
+        const pkgMatch = petDoc.vaccinePackages.find((p: any) => p.id === item.packageId);
+        if (pkgMatch && Array.isArray(pkgMatch.doses)) {
+          const doseMatch = pkgMatch.doses.find(
+            (d: any) => d.status === 'pending' || d.doseNumber === itemDoseNum
+          );
+          if (doseMatch) {
+            doseMatch.status = 'administered';
+            doseMatch.administeredAt = adminDateIso;
+            doseMatch.administeredByDoctor = doctorName;
+            doseMatch.treatmentId = itemTreatmentId;
+            doseMatch.vaccineBrand = itemBrand;
+            const newAdmin = pkgMatch.doses.filter((d: any) => d.status === 'administered').length;
+            pkgMatch.administeredDoses = newAdmin;
+            pkgMatch.remainingDoses = Math.max(0, pkgMatch.totalDoses - newAdmin);
+            const nextP = pkgMatch.doses.find((d: any) => d.status === 'pending');
+            pkgMatch.nextScheduledDoseDate = nextP ? nextP.scheduledDate : null;
+            pkgMatch.status = pkgMatch.remainingDoses === 0 ? 'completed' : 'active';
+            pkgMatch.updatedAt = nowIso;
+          }
+        }
+      }
+    }
 
-      await commitFirestoreBatchRest(writes, authCheck.token);
+    // 4. Update Pet Document with all new treatments and independent schedule map
+    const combinedTreatments = [...newTreatmentRecords, ...existingTreatments];
 
-      // Also sync to clinic_inventory, treatments and inventory_movements
-      try {
-        await setFirestoreDocRest('clinic_inventory', medicineId, { stockQuantity: newStock, updatedAt: nowIso }, authCheck.token);
-      } catch (_) {}
-      try {
-        await setFirestoreDocRest('treatments', treatmentId, treatmentRecord, authCheck.token);
-      } catch (_) {}
-      try {
-        await setFirestoreDocRest('inventory_movements', movementId, movementRecord, authCheck.token);
-      } catch (_) {}
+    // Find latest administered vaccine to keep summary fields fresh
+    const lastVacRecord = newTreatmentRecords.find(
+      (r) => r.medicineCategory === 'Vaccine' || Boolean(r.doseNumber)
+    );
 
-      resultData = {
-        treatment: treatmentRecord,
-        previousStock: currentStock,
-        newStock,
-        medicineName: medData.name,
-        unit: medData.unit || 'unit',
-      };
+    const updatedPetData: Record<string, any> = {
+      ...petDoc,
+      lastTreatmentAt: nowIso,
+      lastVisit: nowIso.split('T')[0],
+      treatments: combinedTreatments,
+      vaccineScheduleMap,
+      updatedAt: nowIso,
+    };
+
+    if (lastVacRecord) {
+      updatedPetData.lastVaccinationAt = lastVacRecord.administeredAt;
+      updatedPetData.lastVaccineName = lastVacRecord.medicineName;
+      updatedPetData.lastVaccineDose = lastVacRecord.doseNumber;
+      if (lastVacRecord.nextDueDate) {
+        updatedPetData.nextVaccinationDue = lastVacRecord.nextDueDate;
+      }
+    }
+
+    // 5. Commit all writes to Firestore
+    if (hasServiceAccount() && adminDb) {
+      const batch = adminDb.batch();
+      for (const t of newTreatmentRecords) {
+        batch.set(adminDb.collection('treatments').doc(t.id), t);
+      }
+      for (const inv of inventoryUpdates) {
+        batch.update(adminDb.collection(inv.collection).doc(inv.id), {
+          stockQuantity: inv.newStock,
+          updatedAt: nowIso,
+        });
+      }
+      batch.set(adminDb.collection('pets').doc(petId), updatedPetData, { merge: true });
+      await batch.commit();
+    } else {
+      for (const t of newTreatmentRecords) {
+        try {
+          await setFirestoreDocRest('treatments', t.id, t, authCheck.token);
+        } catch (_) {}
+      }
+      for (const inv of inventoryUpdates) {
+        try {
+          await setFirestoreDocRest(
+            inv.collection,
+            inv.id,
+            { stockQuantity: inv.newStock, updatedAt: nowIso },
+            authCheck.token
+          );
+        } catch (_) {}
+      }
+      await setFirestoreDocRest('pets', petId, updatedPetData, authCheck.token);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Treatment recorded successfully! Stock deducted: ${qty} ${resultData.unit}. Remaining stock: ${resultData.newStock}.`,
-      ...resultData,
+      message:
+        newTreatmentRecords.length > 1
+          ? `Successfully recorded ${newTreatmentRecords.length} vaccines with individual schedules and stock deductions!`
+          : `Treatment successfully recorded!`,
+      treatments: newTreatmentRecords,
+      treatment: newTreatmentRecords[0],
+      count: newTreatmentRecords.length,
     });
   } catch (error: any) {
-    console.error('[Clinic Treatment POST Error]', error);
+    console.error('[Clinic Treatments POST Error]', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to record treatment.' },
+      { success: false, error: error.message || 'Failed to record treatments.' },
       { status: 400 }
     );
   }

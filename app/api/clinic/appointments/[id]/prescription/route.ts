@@ -76,6 +76,8 @@ export async function GET(
       prescribedItems: treatment?.prescribedItems || treatment?.prescriptions || [],
       consultationFee: treatment?.consultationFee || 0,
       medicinesFee: treatment?.medicinesFee || 0,
+      packageFee: treatment?.packageFee || 0,
+      purchasedPackage: treatment?.purchasedPackage || appointment?.purchasedPackage || null,
       discount: treatment?.discount || 0,
       totalAmount: treatment?.totalAmount || 0,
       advice: treatment?.advice || '',

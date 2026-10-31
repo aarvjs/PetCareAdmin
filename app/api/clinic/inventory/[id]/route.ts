@@ -82,10 +82,24 @@ export async function PATCH(request: Request, context: RouteContext) {
     };
 
     if (body.name !== undefined) updates.name = body.name.trim();
+    if (body.genericName !== undefined) updates.genericName = body.genericName.trim();
     if (body.category !== undefined) updates.category = body.category.trim();
+    if (body.strength !== undefined) updates.strength = body.strength.trim();
+    if (body.dosageUnit !== undefined) updates.dosageUnit = body.dosageUnit.trim();
+    if (body.manufacturer !== undefined) updates.manufacturer = body.manufacturer.trim();
+    if (body.description !== undefined) updates.description = body.description.trim();
+    if (body.defaultInstructions !== undefined) updates.defaultInstructions = body.defaultInstructions.trim();
+    if (body.price !== undefined && body.price !== '') {
+      const p = parseFloat(body.price);
+      if (!isNaN(p) && p >= 0) updates.price = p;
+    }
     if (body.unit !== undefined) updates.unit = body.unit.trim().toLowerCase();
     if (body.batchNumber !== undefined) updates.batchNumber = body.batchNumber.trim().toUpperCase();
     if (body.expiryDate !== undefined) updates.expiryDate = body.expiryDate.trim();
+    if (body.notes !== undefined) updates.notes = body.notes.trim();
+    if (body.status !== undefined && ['active', 'inactive', 'archived'].includes(body.status.toLowerCase())) {
+      updates.status = body.status.toLowerCase();
+    }
     if (body.lowStockThreshold !== undefined) {
       const t = parseInt(body.lowStockThreshold, 10);
       if (!isNaN(t) && t >= 0) updates.lowStockThreshold = t;
@@ -157,6 +171,55 @@ export async function PATCH(request: Request, context: RouteContext) {
     console.error('[Clinic Inventory PATCH Error]', error);
     return NextResponse.json(
       { success: false, error: error.message || 'Failed to update inventory item.' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/clinic/inventory/[id]
+ * Safely deactivates/archives a medicine instead of permanently deleting it,
+ * preserving clinical history, billing, and prescriptions.
+ */
+export async function DELETE(request: Request, context: RouteContext) {
+  try {
+    const { id } = await context.params;
+
+    // 1. Authorize caller
+    const authCheck = await isRequestAuthorizedForClinicStaff(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: authCheck.error || 'Access Denied: Unauthorized.' },
+        { status: authCheck.status || 403 }
+      );
+    }
+
+    const updates = {
+      status: 'archived',
+      updatedAt: new Date().toISOString(),
+      archivedByUid: authCheck.uid,
+    };
+
+    if (hasServiceAccount() && adminDb) {
+      await adminDb.collection('inventory').doc(id).set(updates, { merge: true });
+      try {
+        await adminDb.collection('clinic_inventory').doc(id).set(updates, { merge: true });
+      } catch (_) {}
+    } else {
+      await setFirestoreDocRest('inventory', id, updates);
+      try {
+        await setFirestoreDocRest('clinic_inventory', id, updates);
+      } catch (_) {}
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Medicine successfully archived.',
+    });
+  } catch (error: any) {
+    console.error('[Clinic Inventory DELETE Error]', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to archive medicine.' },
       { status: 500 }
     );
   }

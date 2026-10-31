@@ -143,13 +143,21 @@ export async function POST(request: Request) {
 
     const {
       name,
+      genericName,
       category,
+      strength,
+      dosageUnit,
+      manufacturer,
+      description,
+      defaultInstructions,
+      price,
       stockQuantity,
       unit,
       batchNumber,
       expiryDate,
       lowStockThreshold,
       notes,
+      status,
     } = body;
 
     // 2. Validate required fields
@@ -160,10 +168,18 @@ export async function POST(request: Request) {
       );
     }
 
-    const parsedStock = parseInt(stockQuantity, 10);
+    const parsedStock = parseInt(stockQuantity ?? '0', 10);
     if (isNaN(parsedStock) || parsedStock < 0) {
       return NextResponse.json(
         { success: false, error: 'Stock quantity must be a non-negative number.' },
+        { status: 400 }
+      );
+    }
+
+    const parsedPrice = price !== undefined && price !== '' ? parseFloat(price) : 0;
+    if (isNaN(parsedPrice) || parsedPrice < 0) {
+      return NextResponse.json(
+        { success: false, error: 'Medicine price must be a valid non-negative number.' },
         { status: 400 }
       );
     }
@@ -181,7 +197,14 @@ export async function POST(request: Request) {
     const inventoryItem = {
       id: itemId,
       name: name.trim(),
+      genericName: genericName ? genericName.trim() : '',
       category: category ? category.trim() : 'Medicine',
+      strength: strength ? strength.trim() : '',
+      dosageUnit: dosageUnit ? dosageUnit.trim() : '',
+      manufacturer: manufacturer ? manufacturer.trim() : '',
+      description: description ? description.trim() : '',
+      defaultInstructions: defaultInstructions ? defaultInstructions.trim() : '',
+      price: parsedPrice,
       stockQuantity: parsedStock,
       unit: unit ? unit.trim().toLowerCase() : 'vial',
       batchNumber: batchNumber ? batchNumber.trim().toUpperCase() : '',
@@ -190,7 +213,7 @@ export async function POST(request: Request) {
       notes: notes ? notes.trim() : '',
       businessId: assignedBizId,
       shopId: assignedShopId,
-      status: 'active',
+      status: status && ['active', 'inactive', 'archived'].includes(status.toLowerCase()) ? status.toLowerCase() : 'active',
       createdByUid: authCheck.uid,
       createdByName: authCheck.fullName,
       createdAt: nowIso,

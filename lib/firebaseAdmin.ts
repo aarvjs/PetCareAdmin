@@ -415,6 +415,40 @@ export async function setFirestoreDocRest(
   return decodeFirestoreDoc(json);
 }
 
+export async function deleteFirestoreDocRest(
+  collectionName: string,
+  docId: string,
+  idToken?: string
+): Promise<boolean> {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    'pet-clinic-47727';
+  const apiKey =
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+    'AIzaSyBWM-Kc_cJmH75vEVMBvBaosvbLAI_62lg';
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${encodeURIComponent(docId)}?key=${apiKey}`;
+
+  const serverBotToken = await getServerIdToken();
+  const token = serverBotToken || idToken;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers,
+      cache: 'no-store',
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn(`[deleteFirestoreDocRest error on ${collectionName}/${docId}]`, e);
+    return false;
+  }
+}
+
 export async function commitFirestoreBatchRest(
   writes: Array<{
     collectionName: string;

@@ -400,3 +400,233 @@ export function getVaccineDisplayStatus(params: {
   };
 }
 
+// ============================================================================
+// FEATURE 2: VACCINE PACKAGES WITH CONFIGURABLE DOSES & PER-DOSE PRICING
+// ============================================================================
+
+export interface VaccinePackage {
+  id: string;
+  name: string;
+  vaccineName: string;
+  species: 'Dog' | 'Cat' | 'All';
+  description: string;
+  totalDoses: number;
+  pricePerDose: number;
+  packagePrice: number; // totalDoses * pricePerDose
+  intervalDays: number;
+  status: 'Active' | 'Inactive' | 'Archived';
+  brand?: string;
+  classification?: 'series' | 'booster' | 'annual_booster';
+  businessId?: string;
+  shopId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PetPackageDose {
+  doseIndex: number; // 1, 2, 3...
+  doseNumber: string; // "Dose 1", "Dose 2", "Booster", "Annual Booster"
+  status: 'pending' | 'administered' | 'cancelled';
+  scheduledDate: string; // YYYY-MM-DD
+  administeredAt?: string | null;
+  administeredByDoctor?: string | null;
+  administeredByUid?: string | null;
+  batchNumber?: string | null;
+  vaccineBrand?: string | null;
+  appointmentId?: string | null;
+  treatmentId?: string | null;
+  notes?: string | null;
+}
+
+export interface PetPurchasedPackage {
+  id: string; // pkg_pet_...
+  packageId: string;
+  packageName: string;
+  vaccineName: string;
+  petId: string;
+  petName: string;
+  petRegistrationNumber?: string;
+  ownerName?: string;
+  ownerPhone?: string;
+  totalDoses: number;
+  pricePerDose: number;
+  packagePrice: number;
+  amountPaid: number;
+  outstandingAmount: number;
+  paymentStatus: 'Paid' | 'Pending' | 'Partial';
+  paymentMethod?: string;
+  administeredDoses: number;
+  remainingDoses: number;
+  purchasedAt: string;
+  purchasedAppointmentId?: string | null;
+  businessId: string;
+  shopId: string;
+  status: 'active' | 'completed' | 'cancelled';
+  doses: PetPackageDose[];
+  nextScheduledDoseDate?: string | null;
+  updatedAt: string;
+  auditHistory?: Array<{
+    action: string;
+    actorName?: string;
+    timestamp: string;
+    details?: string;
+  }>;
+}
+
+export const DEFAULT_VACCINE_PACKAGES: Omit<VaccinePackage, 'businessId' | 'shopId'>[] = [
+  {
+    id: 'pkg_9in1_standard',
+    name: 'Vaccination (9 in 1) Complete Package',
+    vaccineName: 'Vaccination (9 in 1)',
+    species: 'Dog',
+    description: 'Comprehensive 5-dose immunization package covering initial puppy series plus follow-up boosters against DHPPIL.',
+    totalDoses: 5,
+    pricePerDose: 500,
+    packagePrice: 2500,
+    intervalDays: 21,
+    status: 'Active',
+  },
+  {
+    id: 'pkg_arv_package',
+    name: 'Anti-Rabies (ARV) 2-Dose Package',
+    vaccineName: 'Anti-Rabies Vaccine (ARV)',
+    species: 'All',
+    description: 'Complete Rabies immunization package with primary dose and booster.',
+    totalDoses: 2,
+    pricePerDose: 350,
+    packagePrice: 700,
+    intervalDays: 28,
+    status: 'Active',
+  },
+  {
+    id: 'pkg_7in1_package',
+    name: 'Vaccination (7 in 1) 3-Dose Series',
+    vaccineName: 'Vaccination (7 in 1)',
+    species: 'Dog',
+    description: 'Core 3-dose series against Distemper, Hepatitis, Parvo, and Lepto.',
+    totalDoses: 3,
+    pricePerDose: 450,
+    packagePrice: 1350,
+    intervalDays: 21,
+    status: 'Active',
+  },
+  {
+    id: 'pkg_puppy_dp',
+    name: 'Puppy DP Early Protection Package',
+    vaccineName: 'Puppy DP',
+    species: 'Dog',
+    description: 'Early 2-dose puppy protection package for Distemper and Parvo at 6-10 weeks.',
+    totalDoses: 2,
+    pricePerDose: 450,
+    packagePrice: 900,
+    intervalDays: 21,
+    status: 'Active',
+  },
+];
+
+/**
+ * Generates initial dose schedule for a purchased vaccine package
+ */
+export function generatePackageDosesSchedule(params: {
+  totalDoses: number;
+  intervalDays: number;
+  startDate?: string | Date;
+  firstDoseAdministered?: boolean;
+  firstDoseDoctor?: string;
+  firstDoseUid?: string;
+  firstDoseBrand?: string;
+  firstDoseBatch?: string;
+  appointmentId?: string;
+}): PetPackageDose[] {
+  const {
+    totalDoses,
+    intervalDays,
+    startDate,
+    firstDoseAdministered = false,
+    firstDoseDoctor,
+    firstDoseUid,
+    firstDoseBrand,
+    firstDoseBatch,
+    appointmentId,
+  } = params;
+
+  const baseDate = startDate ? new Date(startDate) : new Date();
+  const doses: PetPackageDose[] = [];
+
+  for (let i = 1; i <= totalDoses; i++) {
+    const isFirst = i === 1;
+    let doseLabel = `Dose ${i}`;
+    if (i === totalDoses && totalDoses > 1) {
+      doseLabel = totalDoses > 3 ? 'Annual Booster' : 'Booster';
+    }
+
+    if (isFirst && firstDoseAdministered) {
+      doses.push({
+        doseIndex: 1,
+        doseNumber: doseLabel,
+        status: 'administered',
+        scheduledDate: baseDate.toISOString().split('T')[0],
+        administeredAt: baseDate.toISOString(),
+        administeredByDoctor: firstDoseDoctor || 'Doctor',
+        administeredByUid: firstDoseUid,
+        vaccineBrand: firstDoseBrand,
+        batchNumber: firstDoseBatch,
+        appointmentId,
+      });
+    } else {
+      // Calculate future scheduled date
+      const scheduled = new Date(baseDate);
+      if (isFirst) {
+        // First dose not yet administered, scheduled for today
+        doses.push({
+          doseIndex: 1,
+          doseNumber: doseLabel,
+          status: 'pending',
+          scheduledDate: scheduled.toISOString().split('T')[0],
+          appointmentId,
+        });
+      } else {
+        const daysOffset = (i - 1) * (intervalDays || 21);
+        scheduled.setDate(scheduled.getDate() + daysOffset);
+        doses.push({
+          doseIndex: i,
+          doseNumber: doseLabel,
+          status: 'pending',
+          scheduledDate: scheduled.toISOString().split('T')[0],
+          appointmentId,
+        });
+      }
+    }
+  }
+
+  return doses;
+}
+
+/**
+ * Calculates package financials and payment status
+ */
+export function calculatePackageTotals(
+  totalDoses: number,
+  pricePerDose: number,
+  amountPaid: number
+): {
+  packagePrice: number;
+  outstandingAmount: number;
+  paymentStatus: 'Paid' | 'Pending' | 'Partial';
+} {
+  const doses = Math.max(1, totalDoses || 1);
+  const perDose = Math.max(0, pricePerDose || 0);
+  const packagePrice = Math.round(doses * perDose * 100) / 100;
+  const paid = Math.max(0, amountPaid || 0);
+  const outstandingAmount = Math.max(0, Math.round((packagePrice - paid) * 100) / 100);
+
+  let paymentStatus: 'Paid' | 'Pending' | 'Partial' = 'Pending';
+  if (paid >= packagePrice) {
+    paymentStatus = 'Paid';
+  } else if (paid > 0) {
+    paymentStatus = 'Partial';
+  }
+
+  return { packagePrice, outstandingAmount, paymentStatus };
+}
+
